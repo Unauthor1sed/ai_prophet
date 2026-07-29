@@ -1,0 +1,51 @@
+# ===== Web 框架 =====
+fastapi
+uvicorn[standard]
+python-multipart
+aiofiles
+
+# ===== 数据层 =====
+SQLAlchemy
+typing_extensions
+
+# ===== 认证 =====
+bcrypt
+python-jose[cryptography]
+
+# ===== 定时任务 =====
+APScheduler
+
+# ===== HTTP / 爬虫 =====
+httpx
+requests
+feedparser
+beautifulsoup4
+
+# ===== 文档生成 =====
+python-docx
+python-pptx
+docx2python
+pypdf
+
+# ===== 大模型 =====
+openai
+
+# ===== LangGraph/LangChain（工作流） =====
+langgraph
+langchain-core
+langchain-openai
+
+# ===== Coze 平台工具（仅使用 Context/Runtime 类型，内部 SDK） =====
+coze-coding-utils
+
+# ===== 文件处理 / 编码检测 =====
+chardet
+pandas
+
+# ===== 模板 =====
+Jinja2
+pydantic
+
+# ===== 通用工具 =====
+python-dateutil
+PyYAML

@@ -1,0 +1,35 @@
+# AI先知情报智能体 - 单容器部署版（SQLite + FastAPI）
+# 国内网络可直接构建，无需Docker Hub访问
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-prophet
+    restart: unless-stopped
+    ports:
+      - "${PORT:-80}:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      # ====== 必须配置 ======
+      # DeepSeek API Key（从 https://platform.deepseek.com/ 获取，注册送额度）
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
+      # 企业微信Webhook（可选，用于推送早报到群）
+      - WECHAT_WEBHOOK_URL=${WECHAT_WEBHOOK_URL:-}
+      # ====== 以下一般不需要修改 ======
+      - DATABASE_URL=sqlite:////data/ai_prophet.db
+      - DATA_DIR=/data
+      - JWT_SECRET=${JWT_SECRET:-ai_prophet_jwt_secret_change_me}
+      - PASSWORD_SALT=${PASSWORD_SALT:-ai_prophet_salt_2024}
+      - TZ=Asia/Shanghai
+    networks:
+      - ai-prophet-net
+
+networks:
+  ai-prophet-net:
+    driver: bridge

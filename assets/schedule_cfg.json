@@ -1,0 +1,18 @@
+{
+    "tasks": [
+        {
+            "name": "每日早报推送",
+            "enabled": true,
+            "time": "09:00",
+            "workflow_mode": "daily_news",
+            "description": "每日9:00生成并推送AI技术早报"
+        },
+        {
+            "name": "每小时增量采集",
+            "enabled": true,
+            "interval_minutes": 60,
+            "workflow_mode": "hourly_collect",
+            "description": "每小时增量采集新资讯，自动审核分流"
+        }
+    ]
+}

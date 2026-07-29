@@ -1,0 +1,61 @@
+{
+  "sources": [
+    {
+      "name": "arXiv CS.AI",
+      "type": "rss",
+      "url": "http://export.arxiv.org/rss/cs.AI",
+      "enabled": true,
+      "max_items": 10,
+      "description": "arXiv 人工智能领域最新论文"
+    },
+    {
+      "name": "arXiv CS.CL",
+      "type": "rss",
+      "url": "http://export.arxiv.org/rss/cs.CL",
+      "enabled": true,
+      "max_items": 10,
+      "description": "arXiv 计算语言学/LLM领域最新论文"
+    },
+    {
+      "name": "arXiv CS.LG",
+      "type": "rss",
+      "url": "http://export.arxiv.org/rss/cs.LG",
+      "enabled": true,
+      "max_items": 10,
+      "description": "arXiv 机器学习领域最新论文"
+    },
+    {
+      "name": "Reddit MachineLearning",
+      "type": "rss",
+      "url": "https://www.reddit.com/r/MachineLearning/.rss",
+      "enabled": false,
+      "max_items": 10,
+      "description": "Reddit 机器学习社区热门讨论"
+    },
+    {
+      "name": "Hacker News Top",
+      "type": "api",
+      "url": "https://hacker-news.firebaseio.com/v0/topstories.json",
+      "enabled": false,
+      "max_items": 10,
+      "description": "Hacker News 热门科技资讯"
+    },
+    {
+      "name": "AI前沿搜索",
+      "type": "web_search",
+      "keywords": [
+        "AI artificial intelligence latest breakthroughs 2024",
+        "large language model LLM research 2024",
+        "machine learning new architecture paper"
+      ],
+      "enabled": true,
+      "max_items": 5,
+      "description": "通过搜索引擎获取AI前沿资讯"
+    }
+  ],
+  "global": {
+    "max_total_items": 50,
+    "request_timeout": 15,
+    "user_agent": "AI-Prophet/1.0 (Enterprise AI Intelligence Agent)"
+  }
+}
