@@ -130,7 +130,7 @@ def review_interact_node(state: ReviewInteractInput, config: RunnableConfig, run
             # 转为字典
             col_names = list(result.keys())
             item: Dict[str, Any] = dict(zip(col_names, row))
-            current_status: str = str(item.get("review_status", ""))
+            current_status: str = str(item.get("status", ""))
 
             if current_status != "pending":
                 return ReviewInteractOutput(
@@ -140,31 +140,29 @@ def review_interact_node(state: ReviewInteractInput, config: RunnableConfig, run
 
             now_utc = datetime.datetime.now(datetime.timezone.utc)
 
-            # 更新审核状态
+            # 更新审核状态（schema 列名是 status，不是 review_status）
             db.execute(text(
-                "UPDATE review_queue SET review_status = :status, reviewed_at = :reviewed_at, review_comment = :comment WHERE id = :id"
+                "UPDATE review_queue SET status = :status, reviewed_at = :reviewed_at, review_comment = :comment WHERE id = :id"
             ), {"status": action, "reviewed_at": now_utc.isoformat(), "comment": comment, "id": item_id})
             logger.info(f"审核编号 {item_id} 已更新为 {action}")
 
-            # 如果通过 → 写入 news_pool
+            # 如果通过 → 写入 news_pool（映射旧字段名到现有 schema）
             if action == "approved":
-                db.execute(text(
-                    """INSERT INTO news_pool (news_url, title, title_cn, snippet, snippet_cn, site_name, importance, relevance_score, collected_at, approved_at, is_pushed)
-                    VALUES (:news_url, :title, :title_cn, :snippet, :snippet_cn, :site_name, :importance, :relevance_score, :collected_at, :approved_at, :is_pushed)"""
-                ), {
-                    "news_url": str(item.get("news_url", "")),
-                    "title": str(item.get("title", "")),
-                    "title_cn": str(item.get("title_cn", "")),
-                    "snippet": str(item.get("snippet", "")),
-                    "snippet_cn": str(item.get("snippet_cn", "")),
-                    "site_name": str(item.get("site_name", "")),
-                    "importance": str(item.get("importance", "medium")),
-                    "relevance_score": 0.5,
-                    "collected_at": str(item.get("collected_at", now_utc.isoformat())),
-                    "approved_at": now_utc.isoformat(),
-                    "is_pushed": False,
-                })
-                logger.info(f"审核通过 {item_id} 已写入待发池")
+                item_url: str = str(item.get("url", "") or item.get("news_url", ""))
+                if item_url:
+                    db.execute(text(
+                        """INSERT INTO news_pool (title, summary, url, source, news_date, relevance_score, created_at)
+                        VALUES (:title, :summary, :url, :source, :news_date, :score, :now)"""
+                    ), {
+                        "title": str(item.get("title", ""))[:500],
+                        "summary": str(item.get("snippet", "") or item.get("snippet_cn", ""))[:2000],
+                        "url": item_url,
+                        "source": str(item.get("site_name", ""))[:200],
+                        "news_date": now_utc.date().isoformat(),
+                        "score": 0.5,
+                        "now": datetime.datetime.now(),
+                    })
+                    logger.info(f"审核通过 {item_id} 已写入待发池")
 
         # 推送审核结果到审核群
         if review_webhook_url:

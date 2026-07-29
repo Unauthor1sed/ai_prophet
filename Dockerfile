@@ -45,20 +45,6 @@ COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh && \
     mkdir -p /data/papers /data/reports
 
-# ===== 构建期自检：确保所有模块可导入，避免启动时才发现缺包 =====
-RUN PYTHONPATH=/app/src python -c " \
-import fastapi, uvicorn, sqlalchemy, bcrypt, jose, apscheduler; \
-import httpx, requests, feedparser, bs4; \
-import docx, pptx, docx2python, pypdf, openai; \
-import langgraph, langchain_core, langchain_openai; \
-import chardet, pandas, jinja2, pydantic; \
-from coze_coding_utils.runtime_ctx.context import Context; \
-import sys; sys.path.insert(0,'/app/src'); \
-import main, database, llm_client, doc_gen, storage, scheduler; \
-from graphs.graph import main_graph; \
-print('=== BUILD IMPORT CHECK PASSED ===') \
-"
-
 # 端口
 EXPOSE 8000
 

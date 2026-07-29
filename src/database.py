@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, date
 from typing import Optional, Dict, List, Any, Generator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import create_engine, text, inspect, bindparam
 from sqlalchemy.orm import sessionmaker, Session
 
 logger = logging.getLogger(__name__)
@@ -158,7 +158,8 @@ def _init_sqlite():
                 relevance_score REAL DEFAULT 0.5,
                 news_date TEXT NOT NULL DEFAULT (date('now')),
                 published_at TEXT DEFAULT (datetime('now')),
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                is_pushed INTEGER NOT NULL DEFAULT 0
             )
         """))
         
@@ -229,7 +230,16 @@ def _init_sqlite():
             "CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token)",
         ]:
             conn.execute(text(idx_sql))
-        
+
+        # 兼容已有库：补齐新加的列（SQLite 不支持 IF NOT EXISTS for ADD COLUMN）
+        try:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(news_pool)")).fetchall()}
+            if "is_pushed" not in cols:
+                conn.execute(text("ALTER TABLE news_pool ADD COLUMN is_pushed INTEGER NOT NULL DEFAULT 0"))
+                logger.info("为 news_pool 表补充 is_pushed 列")
+        except Exception as e:
+            logger.warning(f"检查/补充 news_pool 列失败（可忽略）: {e}")
+
         conn.commit()
 
 
@@ -574,20 +584,25 @@ def insert_news_pool(item: Dict[str, Any]) -> int:
 
 def insert_review_queue(news_id: int, item_type: str, content_snapshot: Dict[str, Any],
                         trigger_reason: str = "") -> int:
-    """插入审核队列"""
+    """插入审核队列（使用现有 SQLite schema 列）"""
     with get_db() as db:
-        existing = db.execute(text(
-            "SELECT id FROM review_queue WHERE item_id = :nid AND item_type = :t AND status = 'pending'"
-        ), {"nid": news_id, "t": item_type}).fetchone()
-        if existing:
-            return int(existing[0])
+        url: str = str(content_snapshot.get("news_url", "") or content_snapshot.get("url", ""))
+        if url:
+            existing = db.execute(text(
+                "SELECT id FROM review_queue WHERE url = :u AND status = 'pending' LIMIT 1"
+            ), {"u": url}).fetchone()
+            if existing:
+                return int(existing[0])
         result = db.execute(text("""
-            INSERT INTO review_queue (item_id, item_type, content_snapshot, trigger_reason, status, created_at)
-            VALUES (:item_id, :item_type, :snapshot, :reason, 'pending', :now)
+            INSERT INTO review_queue (title, url, source, summary, status, fact_check_result, created_at)
+            VALUES (:title, :url, :source, :summary, 'pending', :snapshot, :now)
         """), {
-            "item_id": news_id, "item_type": item_type,
+            "title": str(content_snapshot.get("title", ""))[:500] or "(无标题)",
+            "url": url,
+            "source": str(content_snapshot.get("site_name", "") or content_snapshot.get("source", ""))[:200],
+            "summary": str(content_snapshot.get("audit_reason", trigger_reason or ""))[:2000],
             "snapshot": json.dumps(content_snapshot, ensure_ascii=False),
-            "reason": trigger_reason, "now": datetime.now()
+            "now": datetime.now(),
         })
         return int(result.lastrowid or 0)
 
@@ -597,18 +612,25 @@ def get_review_queue_by_url(url: str) -> Optional[Dict[str, Any]]:
     if not url:
         return None
     with get_db() as db:
-        row = db.execute(text("""
-            SELECT rq.* FROM review_queue rq
-            JOIN news_pool np ON np.id = rq.item_id AND rq.item_type = 'news'
-            WHERE np.url = :u LIMIT 1
-        """), {"u": url}).fetchone()
+        row = db.execute(text(
+            "SELECT * FROM review_queue WHERE url = :u AND status = 'pending' LIMIT 1"
+        ), {"u": url}).fetchone()
         return dict(row._mapping) if row else None
 
 
-def news_pool_mark_pushed(news_id: int) -> None:
-    """标记新闻已推送到早报"""
+def news_pool_mark_pushed(news_ids) -> None:
+    """标记新闻已推送到早报（接受单个 int 或 int 列表）"""
+    if isinstance(news_ids, (int, str)):
+        news_ids = [news_ids]
+    if not news_ids:
+        return
     with get_db() as db:
-        db.execute(text("UPDATE news_pool SET is_pushed = 1 WHERE id = :id"), {"id": news_id})
+        db.execute(
+            text("UPDATE news_pool SET is_pushed = 1 WHERE id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": list(news_ids)},
+        )
 
 
 def get_available_dates() -> List[str]:

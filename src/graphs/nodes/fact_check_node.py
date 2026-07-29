@@ -145,15 +145,12 @@ def fact_check_node(state: FactCheckInput, config: RunnableConfig, runtime: Runt
             except (ValueError, TypeError):
                 rel_score = 0.5
             pool_data: Dict[str, Any] = {
-                "news_url": url,
+                "url": url,
                 "title": str(news.get("title", item.get("title", ""))),
-                "title_cn": str(news.get("title_cn", "")),
-                "snippet": str(news.get("snippet", "")),
-                "snippet_cn": str(news.get("snippet_cn", "")),
-                "site_name": str(news.get("site_name", "")),
-                "importance": str(news.get("importance", "medium")),
+                "summary": str(news.get("snippet", "")),
+                "source": str(news.get("site_name", "")),
                 "relevance_score": rel_score,
-                "is_pushed": False,
+                "news_date": datetime.date.today().isoformat(),
             }
             try:
                 insert_news_pool(pool_data)
@@ -188,7 +185,14 @@ def fact_check_node(state: FactCheckInput, config: RunnableConfig, runtime: Runt
                 "review_status": "pending",
             }
             try:
-                new_id = insert_review_queue(review_data)
+                # 修正调用：函数签名是 (news_id, item_type, content_snapshot, trigger_reason)
+                # 我们没有具体的 news_id（review_queue 用 item_id 关联），传 0，content_snapshot 存完整 dict
+                new_id = insert_review_queue(
+                    news_id=0,
+                    item_type="news",
+                    content_snapshot=review_data,
+                    trigger_reason=review_data.get("audit_reason", "")
+                )
                 item["id"] = new_id
                 logger.info(f"已写入审核队列: {url[:80]}")
             except Exception as e:
