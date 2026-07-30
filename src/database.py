@@ -680,23 +680,24 @@ def get_paper_tasks(user_id: Optional[int] = None, limit: int = 20) -> List[Dict
     with get_db() as db:
         if user_id:
             rows = db.execute(text("""
-                SELECT id, title, original_filename, status, progress, progress_msg, 
+                SELECT id, title, original_filename, status, progress, progress_msg,
                        analysis_result, report_path, error_msg, created_at, completed_at
                 FROM paper_tasks WHERE user_id = :uid ORDER BY created_at DESC LIMIT :lim
             """), {"uid": user_id, "lim": limit}).fetchall()
         else:
+            # 超级管理员视图：也读 report_path（之前漏了，导致 download 按钮不显示）
             rows = db.execute(text("""
-                SELECT id, user_id, username, title, original_filename, status, progress, progress_msg, 
-                       error_msg, created_at, completed_at
+                SELECT id, user_id, username, title, original_filename, status, progress, progress_msg,
+                       report_path, error_msg, created_at, completed_at
                 FROM paper_tasks ORDER BY created_at DESC LIMIT :lim
             """), {"lim": limit}).fetchall()
         tasks = []
         for r in rows:
             t = dict(r._mapping)
-            # 将report_path转为下载URL
+            # 将 report_path 转为下载 URL（与 main.py @app.get("/files/{file_type}/{filename}") 一致）
             if t.get("report_path"):
                 fname = os.path.basename(t["report_path"])
-                t["report_url"] = f"/api/files/reports/{fname}"
+                t["report_url"] = f"/files/reports/{fname}"
             tasks.append(t)
         return tasks
 

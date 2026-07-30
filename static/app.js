@@ -373,7 +373,16 @@ async function loadPaperTasks() {
           <div class="progress-bar"><div class="progress-fill" style="width:${t.progress}%"></div></div>
           <div class="progress-text">${escapeHtml(t.progress_msg || '')}</div>
           ${t.analysis_result ? `<div class="task-result"><pre>${escapeHtml(t.analysis_result.substring(0, 2000))}</pre></div>` : ''}
-          ${t.report_url ? `<a href="${t.report_url}" target="_blank" class="btn-download">📄 下载完整报告</a>` : ''}
+          ${t.report_url ? `
+            <div class="task-actions">
+              <a href="${t.report_url}" download="${escapeHtml((t.title || 'paper_report') + '.docx')}" class="btn-download">
+                ⬇️ 下载完整报告 (Word)
+              </a>
+              <a href="${t.report_url}" target="_blank" class="btn-preview">
+                👁️ 在新窗口打开
+              </a>
+            </div>
+          ` : ''}
           ${t.error_msg ? `<div class="error-msg">错误: ${escapeHtml(t.error_msg)}</div>` : ''}
           <div class="task-time">提交时间: ${formatDate(t.created_at)}</div>
         </div>

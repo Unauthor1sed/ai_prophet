@@ -58,3 +58,4 @@ __pycache__/
 1.env
 data/
 *.bak
+images.tar
