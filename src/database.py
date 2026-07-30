@@ -97,6 +97,8 @@ def init_database():
     
     # 确保有默认admin账号
     _ensure_default_admin()
+    # 确保有默认敏感词库（仅首次创建时 seed）
+    _ensure_default_sensitive_words()
     logger.info("数据库初始化完成")
 
 
@@ -345,6 +347,41 @@ def _ensure_default_admin():
             db.execute(text(
                 "INSERT INTO users (username, password_hash, role) VALUES (:username, :password_hash, :role)"
             ), {"username": "admin", "password_hash": hash_password("admin123"), "role": "super_admin"})
+
+
+# 默认敏感词库（首次启动时 seed 一次；之后用户在前端增删的不受影响）
+DEFAULT_SENSITIVE_WORDS: List[tuple] = [
+    ("违禁", "politics"),
+    ("非法", "politics"),
+    ("赌博", "vice"),
+    ("色情", "vice"),
+    ("暴力恐怖", "violence"),
+    ("颠覆国家", "politics"),
+    ("分裂国家", "politics"),
+    ("邪教", "politics"),
+    ("毒品", "vice"),
+    ("枪支", "violence"),
+    ("诈骗", "vice"),
+    ("传销", "vice"),
+    ("洗钱", "vice"),
+    ("盗版", "ip"),
+    ("侵权", "ip"),
+]
+
+
+def _ensure_default_sensitive_words():
+    """首次启动时 seed 默认敏感词库（用户后续可自行增删）"""
+    with get_db() as db:
+        count = db.execute(text("SELECT COUNT(*) FROM sensitive_words")).fetchone()[0]
+        if count == 0:
+            for word, category in DEFAULT_SENSITIVE_WORDS:
+                try:
+                    db.execute(text(
+                        "INSERT INTO sensitive_words (word, category, is_active) VALUES (:w, :c, 1)"
+                    ), {"w": word, "c": category})
+                except Exception as e:
+                    logger.warning(f"seed 敏感词 '{word}' 失败: {e}")
+            logger.info(f"已 seed {len(DEFAULT_SENSITIVE_WORDS)} 个默认敏感词")
 
 
 # ========== 用户相关操作 ==========
