@@ -36,6 +36,7 @@ def _do_daily_news():
         result = main_graph.invoke({
             "workflow_mode": "daily_news",
             "wechat_webhook_url": WECHAT_WEBHOOK_URL,
+            "review_webhook_url": REVIEW_WEBHOOK_URL,
             "trigger_source": "schedule",
             "skip_wechat_push": not bool(WECHAT_WEBHOOK_URL)
         })
@@ -51,7 +52,10 @@ def _do_incremental_collect():
         from graphs.graph import main_graph
         result = main_graph.invoke({
             "workflow_mode": "daily_news",
-            "wechat_webhook_url": REVIEW_WEBHOOK_URL,
+            # 增量采集：不推早报摘要（wechat_push_node 按 trigger_source 判断），
+            # 仅将存疑内容推送到审核群
+            "wechat_webhook_url": "",
+            "review_webhook_url": REVIEW_WEBHOOK_URL,
             "trigger_source": "incremental",
             "skip_wechat_push": not bool(REVIEW_WEBHOOK_URL)
         })

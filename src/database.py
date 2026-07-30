@@ -347,8 +347,8 @@ def _ensure_default_admin():
         result = db.execute(text("SELECT id FROM users WHERE username = 'admin'")).fetchone()
         if not result:
             db.execute(text(
-                "INSERT INTO users (username, password_hash, role) VALUES (:username, :password_hash, :role)"
-            ), {"username": "admin", "password_hash": hash_password("admin123"), "role": "super_admin"})
+                "INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES (:username, :password_hash, :role, :now, :now)"
+            ), {"username": "admin", "password_hash": hash_password("admin123"), "role": "super_admin", "now": datetime.now()})
 
 
 # 默认敏感词库（首次启动时 seed 一次；之后用户在前端增删的不受影响）
@@ -433,8 +433,8 @@ def register_user(username: str, password: str, role: str = "individual") -> Opt
         if existing:
             return None
         db.execute(text(
-            "INSERT INTO users (username, password_hash, role) VALUES (:u, :p, :r)"
-        ), {"u": username, "p": hash_password(password), "r": role})
+            "INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES (:u, :p, :r, :now, :now)"
+        ), {"u": username, "p": hash_password(password), "r": role, "now": datetime.now()})
         db.commit()
         user = db.execute(text("SELECT id, username, role, created_at FROM users WHERE username = :u"), {"u": username}).fetchone()
         return dict(user._mapping) if user else None
@@ -545,6 +545,24 @@ def review_action(review_id: int, action: str, comment: str, reviewer_id: int) -
             UPDATE review_queue SET status = :s, review_comment = :c, reviewer_id = :rid, reviewed_at = :now
             WHERE id = :id
         """), {"s": status, "c": comment, "rid": reviewer_id, "now": datetime.now(), "id": review_id})
+
+        # 审核通过 → 写入待发池，下次早报作为"历史审核通过资讯"收录（完成人工复核闭环）
+        if status == "approved":
+            row = db.execute(text(
+                "SELECT title, url, source, summary FROM review_queue WHERE id = :id"
+            ), {"id": review_id}).fetchone()
+            if row and row[1]:
+                existing_news = db.execute(
+                    text("SELECT id FROM news_pool WHERE url = :u"), {"u": row[1]}).fetchone()
+                if not existing_news:
+                    db.execute(text("""
+                        INSERT INTO news_pool (title, summary, url, source, news_date, relevance_score, created_at)
+                        VALUES (:title, :summary, :url, :source, :news_date, 0.5, :now)
+                    """), {
+                        "title": row[0], "summary": row[3] or "", "url": row[1],
+                        "source": row[2] or "", "news_date": date.today().isoformat(),
+                        "now": datetime.now(),
+                    })
         return True
 
 
@@ -743,10 +761,11 @@ def create_paper_task(user_id: int, username: str, title: str, filename: str, pa
     """创建论文分析任务"""
     with get_db() as db:
         result = db.execute(text("""
-            INSERT INTO paper_tasks (user_id, username, title, original_filename, paper_path, status, progress, progress_msg)
-            VALUES (:uid, :un, :t, :fn, :pp, 'pending', 0, '等待处理')
+            INSERT INTO paper_tasks (user_id, username, title, original_filename, paper_path, status, progress, progress_msg, created_at, updated_at)
+            VALUES (:uid, :un, :t, :fn, :pp, 'pending', 0, '等待处理', :now, :now)
             RETURNING id
-        """), {"uid": user_id, "un": username, "t": title, "fn": filename, "pp": paper_path})
+        """), {"uid": user_id, "un": username, "t": title, "fn": filename, "pp": paper_path,
+               "now": datetime.now()})
         task_id = result.fetchone()[0]
         db.commit()
         return task_id

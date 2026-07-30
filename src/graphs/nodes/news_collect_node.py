@@ -133,17 +133,24 @@ def _get_builtin_defaults() -> dict:
     }
 
 
-def _http_get(url: str, timeout: int = 15, headers: Optional[dict] = None) -> Optional[str]:
-    """简单HTTP GET请求"""
+def _http_get(url: str, timeout: int = 15, headers: Optional[dict] = None,
+              retries: int = 2) -> Optional[str]:
+    """简单HTTP GET请求，失败自动重试（共尝试 retries+1 次，间隔递增）"""
     if headers is None:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; AI-Prophet/1.0)"}
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", errors="ignore")
-    except Exception as e:
-        logger.debug(f"HTTP GET {url} failed: {e}")
-        return None
+    last_err: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="ignore")
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                logger.debug(f"HTTP GET {url} 第{attempt + 1}次失败: {e}，重试中")
+                time.sleep((attempt + 1) * 2)
+    logger.warning(f"HTTP GET {url} 重试{retries}次后仍失败: {last_err}")
+    return None
 
 
 def _parse_rss_xml(xml_text: str, source_name: str, max_items: int) -> List[Dict[str, Any]]:

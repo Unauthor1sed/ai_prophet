@@ -1,6 +1,7 @@
 """企业微信推送节点 - 将早报/报告推送到企微群，支持审核群交互式卡片"""
 import os
 import json
+import time
 import logging
 import datetime
 import requests
@@ -76,7 +77,8 @@ def _build_paper_report_card(paper_report_url: str, paper_analysis: str) -> str:
 
 
 def _build_review_alert_card(item: Dict[str, Any]) -> str:
-    """构建单条审核提醒卡片（推送到审核群，引导审核员使用Bot命令操作）"""
+    """构建单条审核提醒卡片（推送到审核群，引导审核员到Web审核台处理。
+    企微群机器人为单向推送通道，审核操作在系统审核台完成闭环）"""
     title: str = str(item.get("title_cn", item.get("title", "无标题")))
     reason: str = str(item.get("audit_reason", item.get("fact_reason", "内容存疑")))
     item_id: int = int(item.get("id", 0))
@@ -100,13 +102,15 @@ def _build_review_alert_card(item: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("---")
     lines.append("")
-    lines.append("## 🤖 使用 Bot 命令操作")
+    # 企微群机器人是单向推送，审核操作请前往Web审核台完成
+    base_url: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    if base_url:
+        lines.append(f"请前往 [审核台]({base_url}/index.html) 处理该条目（编号 #{item_id}）：")
+    else:
+        lines.append(f"请登录系统进入「人工审核」页面处理该条目（编号 #{item_id}）：")
     lines.append("")
-    lines.append("在 Coze 平台 Bot 对话中输入以下命令：")
-    lines.append("")
-    lines.append(f"- `通过 #{item_id}` — 通过审核，加入早报")
-    lines.append(f"- `拒绝 #{item_id} [原因]` — 拒绝此条")
-    lines.append(f"- `查看审核` — 查看所有待审列表")
+    lines.append("- **通过** — 加入早报")
+    lines.append("- **驳回** — 不进早报（可填写原因）")
     lines.append("")
     lines.append("---")
     lines.append(f"_{_get_current_time()} · 由人工审核小助手自动生成_")
@@ -131,11 +135,16 @@ def wechat_push_node(state: WechatPushInput, config: RunnableConfig, runtime: Ru
 
     if not webhook_url:
         webhook_url = os.getenv("WECHAT_WEBHOOK_URL", "")
+    # 审核群Webhook同样支持环境变量兜底（否则存疑通知永远发不出去）
+    if not review_webhook_url:
+        review_webhook_url = os.getenv("REVIEW_WEBHOOK_URL", "")
 
     push_messages: list[dict[str, Any]] = []
 
-    # 每日早报推送（推送到早报群）
-    if state.daily_report_url and webhook_url:
+    # 每日早报推送（只发早报主群；增量采集不发摘要，避免每小时打扰主群，
+    # 增量场景只把存疑内容推到审核群）
+    is_incremental: bool = state.trigger_source == "incremental"
+    if state.daily_report_url and webhook_url and not is_incremental:
         filtered_news: List[Dict[str, Any]] = state.filtered_news
         msg_content: str = _build_morning_report_card(state.daily_report_url, filtered_news)
         push_messages.append({
@@ -189,27 +198,41 @@ def wechat_push_node(state: WechatPushInput, config: RunnableConfig, runtime: Ru
             logger.warning(f"推送目标 {target} 缺少Webhook地址")
             continue
 
-        try:
-            resp = requests.post(
-                target_url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=10
-            )
-            if resp.status_code == 200:
-                resp_data: Dict[str, Any] = resp.json()
-                if resp_data.get("errcode") == 0:
-                    success_count += 1
-                    logger.info(f"企微消息推送成功 ({target})")
+        # 失败重试3次（间隔2s/4s/6s），全部失败后记录告警
+        max_attempts: int = 3
+        pushed: bool = False
+        last_error: str = ""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = requests.post(
+                    target_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=10
+                )
+                if resp.status_code == 200:
+                    resp_data: Dict[str, Any] = resp.json()
+                    if resp_data.get("errcode") == 0:
+                        pushed = True
+                        logger.info(f"企微消息推送成功 ({target}, 第{attempt}次尝试)")
+                        break
+                    last_error = f"errcode={resp_data.get('errcode')} {resp_data.get('errmsg')}"
                 else:
-                    fail_count += 1
-                    logger.error(f"企微消息推送失败 ({target}): {resp_data.get('errmsg')}")
-            else:
-                fail_count += 1
-                logger.error(f"企微消息推送HTTP错误 ({target}): {resp.status_code}")
-        except Exception as e:
+                    last_error = f"HTTP {resp.status_code}"
+            except Exception as e:
+                last_error = str(e)
+            if attempt < max_attempts:
+                logger.warning(f"企微推送失败 ({target}, 第{attempt}次): {last_error}，{attempt * 2}s后重试")
+                time.sleep(attempt * 2)
+
+        if pushed:
+            success_count += 1
+        else:
             fail_count += 1
-            logger.error(f"企微消息推送异常 ({target}): {e}")
+            # 告警：ERROR级日志（运维监控/日志采集可据此触发通知）
+            logger.error(
+                f"【告警】企微消息推送失败 ({target})：已重试{max_attempts}次仍失败，"
+                f"最后错误: {last_error}，请检查Webhook配置和网络")
 
     result_msg: str = f"推送完成：成功{success_count}条，失败{fail_count}条"
     return WechatPushOutput(wechat_push_result=result_msg)

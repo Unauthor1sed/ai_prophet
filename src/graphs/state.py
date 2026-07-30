@@ -279,6 +279,7 @@ class WechatPushInput(BaseModel):
     review_items: List[dict] = Field(default=[], description="待审核条目列表")
     paper_analysis: str = Field(default="", description="论文分析结果")
     skip_wechat_push: bool = Field(default=False, description="是否跳过企微推送")
+    trigger_source: str = Field(default="", description="触发来源：schedule/incremental/manual等，incremental时不推早报摘要")
 
 
 class WechatPushOutput(BaseModel):
@@ -295,6 +296,7 @@ class WechatReceiveInput(BaseModel):
     paper_file: Optional[File] = Field(default=None, description="上游传入的论文文件（manual触发时传入）")
     search_keywords: List[str] = Field(default=[], description="上游传入的搜索关键词")
     skip_wechat_push: bool = Field(default=False, description="是否跳过企微推送")
+    trigger_source: str = Field(default="", description="上游传入的触发来源（schedule/incremental/manual），需透传")
 
 
 class WechatReceiveOutput(BaseModel):

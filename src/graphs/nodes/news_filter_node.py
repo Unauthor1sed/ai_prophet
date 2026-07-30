@@ -44,7 +44,11 @@ def news_filter_node(state: NewsFilterInput, config: RunnableConfig, runtime: Ru
     temperature: float = float(llm_config.get("temperature", 0.3))
     max_tokens: int = int(llm_config.get("max_completion_tokens", 4096))
 
+    # 分数阈值：低于阈值不进早报（可通过环境变量调整）
+    min_score: float = float(os.getenv("FILTER_MIN_SCORE", "0.6"))
+
     # 调用大模型（使用通用LLM客户端）
+    excluded_news: List[Dict[str, Any]] = []
     try:
         result = chat_completion_with_json(
             system_prompt=sp,
@@ -52,15 +56,50 @@ def news_filter_node(state: NewsFilterInput, config: RunnableConfig, runtime: Ru
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        if isinstance(result, list):
-            filtered_news: List[Dict[str, Any]] = result
+        if isinstance(result, dict) and "selected" in result:
+            filtered_news: List[Dict[str, Any]] = result.get("selected") or []
+            excluded_news = result.get("excluded") or []
+        elif isinstance(result, list):
+            filtered_news = result
         elif isinstance(result, dict) and "news" in result:
             filtered_news = result["news"]
         else:
             filtered_news = deduped_news[:10]
+
+        # 阈值过滤：低于 min_score 的从入选中移出，并保留筛除原因
+        passed: List[Dict[str, Any]] = []
+        for item in filtered_news:
+            score = float(item.get("relevance_score") or 0.5)
+            if score >= min_score:
+                passed.append(item)
+            else:
+                excluded_news.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "relevance_score": score,
+                    "reason": item.get("reason") or f"低于阈值({min_score})",
+                })
+        filtered_news = passed
     except Exception as e:
         logger.warning(f"LLM调用或解析失败，使用原始数据: {e}")
         filtered_news = deduped_news[:10]
 
-    logger.info(f"资讯筛选完成：{len(deduped_news)} → {len(filtered_news)} 条")
+    # 保留筛除原因：写入日志 + 落盘（/data/reports/filter_excluded_日期.jsonl）
+    if excluded_news:
+        for ex in excluded_news:
+            logger.info(f"筛除 [{ex.get('title', '')[:40]}] 原因: {ex.get('reason', '未说明')}")
+        try:
+            reports_dir = os.path.join(os.getenv("DATA_DIR", "/data"), "reports")
+            os.makedirs(reports_dir, exist_ok=True)
+            excl_path = os.path.join(
+                reports_dir, f"filter_excluded_{datetime.date.today().isoformat()}.jsonl")
+            with open(excl_path, "a", encoding="utf-8") as fd:
+                for ex in excluded_news:
+                    fd.write(json.dumps(ex, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning(f"筛除记录落盘失败: {e}")
+
+    logger.info(
+        f"资讯筛选完成：{len(deduped_news)} → {len(filtered_news)} 条"
+        f"（阈值 {min_score}，筛除 {len(excluded_news)} 条，原因已保留）")
     return NewsFilterOutput(filtered_news=filtered_news)

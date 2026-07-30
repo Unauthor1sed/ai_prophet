@@ -1,35 +1,54 @@
 # AI先知情报智能体 - 单容器部署版（SQLite + FastAPI）
-# 国内网络可直接构建，无需Docker Hub访问
-version: '3.8'
+#
+# 两种启动方式：
+#   A. 离线镜像（推荐交付方式）：
+#        docker load -i images.tar
+#        docker compose up -d
+#   B. 本地构建：
+#        docker compose up -d --build
+#
+# 配置文件：把 1.env（或 .env.example）复制为 .env 放在本目录，
+# compose 会自动读取；沿用旧的 1.env 文件名也可以（两个都会尝试加载）。
 
 services:
   api:
+    image: ai-prophet:latest
     build:
       context: .
       dockerfile: Dockerfile
     container_name: ai-prophet
     restart: unless-stopped
     ports:
-      - "${PORT:-80}:8000"
+      # 对外端口：在 .env 里改 PORT（默认 8080），容器内固定 8000
+      - "${PORT:-8080}:8000"
     volumes:
       - ./data:/data
+    # ============================================================
+    # 关键修复：显式指定容器 DNS。
+    # 在部分 Docker Desktop / 定制内核环境下，Docker 探测不到宿主机
+    # DNS（host file 为空），compose 自定义网络的内置解析器就没有
+    # 上游 DNS，容器内所有域名解析失败（LLM/RSS/企微全部不可用）。
+    # 显式写死公共 DNS 后，默认 bridge 和自定义网络都能正常解析。
+    # ============================================================
+    dns:
+      - 223.5.5.5      # 阿里公共DNS
+      - 119.29.29.29   # 腾讯DNSPod
+      - 114.114.114.114
+    # 容器环境变量：优先 .env，兼容旧的 1.env 文件名（都不存在也能启动，
+    # 只是 LLM 调用会因缺少 API Key 失败）
+    env_file:
+      - path: ./.env
+        required: false
+      - path: ./1.env
+        required: false
     environment:
-      # ====== 必须配置 ======
-      # DeepSeek API Key（从 https://platform.deepseek.com/ 获取，注册送额度）
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
-      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
-      # 企业微信Webhook（可选，用于推送早报到群）
-      - WECHAT_WEBHOOK_URL=${WECHAT_WEBHOOK_URL:-}
-      # ====== 以下一般不需要修改 ======
+      # ====== 固定基础配置（一般不需要修改） ======
       - DATABASE_URL=sqlite:////data/ai_prophet.db
       - DATA_DIR=/data
-      - JWT_SECRET=${JWT_SECRET:-ai_prophet_jwt_secret_change_me}
-      - PASSWORD_SALT=${PASSWORD_SALT:-ai_prophet_salt_2024}
       - TZ=Asia/Shanghai
-    networks:
-      - ai-prophet-net
-
-networks:
-  ai-prophet-net:
-    driver: bridge
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3

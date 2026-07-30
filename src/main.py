@@ -456,14 +456,17 @@ if STATIC_DIR:
     logger.info(f"挂载静态文件目录: {STATIC_DIR}")
 
     # 显式登录页和控制台页面路由
+    # HTML入口页禁止缓存：否则更新版本后浏览器可能继续用旧页面/旧JS引用
+    _NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
+
     @app.get("/", include_in_schema=False)
     @app.get("/login", include_in_schema=False)
     async def _login_page():
-        return FileResponse(os.path.join(STATIC_DIR, "login.html"))
+        return FileResponse(os.path.join(STATIC_DIR, "login.html"), headers=_NO_CACHE)
 
     @app.get("/index.html", include_in_schema=False)
     async def _index_page():
-        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"), headers=_NO_CACHE)
 
     # 挂载其余静态资源（/app.js 等），html=False 避免把根路径吞掉
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=False), name="static")

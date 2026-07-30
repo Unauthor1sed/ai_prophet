@@ -390,6 +390,8 @@ async function submitPaper() {
     showToast('论文已提交，开始分析！', 'success');
     fileInput.value = '';
     titleInput.value = '';
+    const hint = document.getElementById('file-hint');
+    if (hint) { hint.textContent = '支持PDF格式，最大50MB'; hint.style.color = ''; }
     loadPaperTasks();
     startPolling();
   } catch (e) {
@@ -468,4 +470,22 @@ function stopPolling() {
 // ====== 初始化 ======
 document.addEventListener('DOMContentLoaded', () => {
   checkAuth();
+
+  // 论文PDF选择反馈：选中后显示文件名和大小，避免"选了没反应"
+  const paperFileInput = document.getElementById('paper-file');
+  if (paperFileInput) {
+    paperFileInput.addEventListener('change', () => {
+      const hint = document.getElementById('file-hint');
+      const file = paperFileInput.files[0];
+      if (!hint) return;
+      if (file) {
+        const sizeMb = (file.size / 1024 / 1024).toFixed(2);
+        hint.textContent = `已选择：${file.name}（${sizeMb} MB），点击"提交分析"开始`;
+        hint.style.color = '#4ade80';
+      } else {
+        hint.textContent = '支持PDF格式，最大50MB';
+        hint.style.color = '';
+      }
+    });
+  }
 });
