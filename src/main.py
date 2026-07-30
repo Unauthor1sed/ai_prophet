@@ -10,7 +10,7 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request, Response
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request, Response, BackgroundTasks
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -159,6 +159,54 @@ async def api_me(user: dict = Depends(get_current_user)):
 @app.get("/api/dashboard/stats")
 async def api_dashboard_stats(user: dict = Depends(get_current_user)):
     return database.get_dashboard_stats()
+
+
+# ========== 手动触发（管理员） ==========
+
+@app.post("/api/admin/trigger/daily-news")
+async def api_trigger_daily_news(
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    """管理员手动触发一次早报推送（在后台异步执行，不阻塞请求）"""
+    import scheduler as _scheduler
+
+    def _run():
+        try:
+            _scheduler._do_daily_news()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"手动触发早报失败: {e}", exc_info=True)
+
+    background_tasks.add_task(_run)
+    return {
+        "success": True,
+        "message": "早报任务已加入后台队列，完成后可在看板/历史早报查看。",
+        "triggered_by": user["username"],
+    }
+
+
+@app.post("/api/admin/trigger/incremental-collect")
+async def api_trigger_incremental_collect(
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    """管理员手动触发一次增量采集"""
+    import scheduler as _scheduler
+
+    def _run():
+        try:
+            _scheduler._do_incremental_collect()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"手动触发增量采集失败: {e}", exc_info=True)
+
+    background_tasks.add_task(_run)
+    return {
+        "success": True,
+        "message": "增量采集已加入后台队列。",
+        "triggered_by": user["username"],
+    }
 
 
 # ========== 审核API ==========

@@ -107,8 +107,58 @@ async function loadDashboard() {
     document.getElementById('stat-pending').textContent = reviewStats.pending || 0;
     document.getElementById('stat-users').textContent = stats.total_users || 0;
     document.getElementById('stat-sources').textContent = stats.total_sources || 0;
+
+    // 管理员操作区显示（admin / super_admin 才显示）
+    const role = currentUser && currentUser.role;
+    const adminBox = document.getElementById('admin-actions');
+    if (adminBox && (role === 'admin' || role === 'super_admin')) {
+      adminBox.style.display = 'block';
+    }
   } catch (e) {
     showToast('加载统计失败: ' + e.message, 'error');
+  }
+}
+
+// ====== 管理员手动触发 ======
+function _setTriggerStatus(text, isError) {
+  const el = document.getElementById('trigger-status');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? '#f87171' : 'var(--text-muted)';
+}
+
+async function triggerDailyNews() {
+  const btn = document.getElementById('btn-trigger-daily');
+  if (!confirm('确认立即触发一次早报推送？\n\n会执行：采集→去重→筛选→翻译→审核→生成 Word→推送企业微信')) return;
+  btn.disabled = true;
+  btn.textContent = '⏳ 推送中…';
+  _setTriggerStatus('已加入后台队列，请稍后到「历史早报」查看结果（约 1-3 分钟）', false);
+  try {
+    const r = await api('/admin/trigger/daily-news', { method: 'POST' });
+    showToast(r.message || '已触发', 'success');
+  } catch (e) {
+    _setTriggerStatus('触发失败: ' + e.message, true);
+    showToast(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🚀 立即推送今日早报';
+  }
+}
+
+async function triggerIncrementalCollect() {
+  const btn = document.getElementById('btn-trigger-incremental');
+  btn.disabled = true;
+  btn.textContent = '⏳ 采集中…';
+  _setTriggerStatus('已加入后台队列，增量采集完成后会自动推送到审核群', false);
+  try {
+    const r = await api('/admin/trigger/incremental-collect', { method: 'POST' });
+    showToast(r.message || '已触发', 'success');
+  } catch (e) {
+    _setTriggerStatus('触发失败: ' + e.message, true);
+    showToast(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 立即增量采集';
   }
 }
 

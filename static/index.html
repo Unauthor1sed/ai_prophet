@@ -324,6 +324,21 @@
         <div class="stat-value" id="stat-sources">-</div>
       </div>
     </div>
+
+    <!-- 管理员手动操作（admin/super_admin 可见） -->
+    <div class="card" id="admin-actions" style="display:none">
+      <div class="card-title">⚙️ 管理员操作</div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom: 12px;">
+        <button class="btn-approve" onclick="triggerDailyNews()" id="btn-trigger-daily">
+          🚀 立即推送今日早报
+        </button>
+        <button class="btn-approve" onclick="triggerIncrementalCollect()" id="btn-trigger-incremental">
+          🔄 立即增量采集
+        </button>
+      </div>
+      <div id="trigger-status" style="font-size:12px; color:var(--text-muted); line-height:1.7"></div>
+    </div>
+
     <div class="card">
       <div class="card-title">系统说明</div>
       <p style="color:var(--text-secondary); font-size:13px; line-height:1.8">
