@@ -23,6 +23,11 @@ def paper_report_gen_node(state: PaperReportGenInput, config: RunnableConfig, ru
     if not analysis:
         return PaperReportGenOutput(paper_report_url="")
 
+    # 剥离LLM可能带的开场白：若正文前500字符内出现首个Markdown标题，则从标题开始
+    first_heading = analysis.find("## ")
+    if 0 < first_heading < 500:
+        analysis = analysis[first_heading:]
+
     now_str: str = datetime.datetime.now().strftime("%Y年%m月%d日 %H:%M")
     markdown_content: str = f"""# SCI论文精析报告
 
