@@ -99,6 +99,8 @@ def init_database():
     _ensure_default_admin()
     # 确保有默认敏感词库（仅首次创建时 seed）
     _ensure_default_sensitive_words()
+    # 确保有默认资讯源（仅首次创建时 seed）
+    _ensure_default_news_sources()
     logger.info("数据库初始化完成")
 
 
@@ -382,6 +384,41 @@ def _ensure_default_sensitive_words():
                 except Exception as e:
                     logger.warning(f"seed 敏感词 '{word}' 失败: {e}")
             logger.info(f"已 seed {len(DEFAULT_SENSITIVE_WORDS)} 个默认敏感词")
+
+
+# 默认资讯源（首次启动 seed；用户后续可自行增删/启停）
+# 多个 subreddit 用 type=rss，url 用 reddit 官方 RSS 端点；
+# 若直接访问 reddit 被网络屏蔽，可在前端把 url 改为 rsshub / 自建代理镜像。
+DEFAULT_NEWS_SOURCES: List[tuple] = [
+    # arXiv 学术
+    ("arXiv CS.AI", "http://export.arxiv.org/rss/cs.AI", "rss", "research"),
+    ("arXiv CS.CL", "http://export.arxiv.org/rss/cs.CL", "rss", "research"),
+    # Hacker News 热门
+    ("Hacker News", "https://hacker-news.firebaseio.com/v0/topstories.json", "api", "tech"),
+    # Reddit（如果网络不通可改为 rsshub 镜像）
+    ("Reddit r/MachineLearning",
+     "https://www.reddit.com/r/MachineLearning/top.rss?t=day", "rss", "reddit"),
+    ("Reddit r/artificial",
+     "https://www.reddit.com/r/artificial/top.rss?t=day", "rss", "reddit"),
+    ("Reddit r/LocalLLaMA",
+     "https://www.reddit.com/r/LocalLLaMA/top.rss?t=day", "rss", "reddit"),
+]
+
+
+def _ensure_default_news_sources():
+    """首次启动时 seed 默认资讯源（用户后续可自行增删/启停）"""
+    with get_db() as db:
+        count = db.execute(text("SELECT COUNT(*) FROM news_sources")).fetchone()[0]
+        if count == 0:
+            for name, url, source_type, category in DEFAULT_NEWS_SOURCES:
+                try:
+                    db.execute(text(
+                        "INSERT INTO news_sources (name, url, source_type, category, is_active) "
+                        "VALUES (:n, :u, :st, :c, 1)"
+                    ), {"n": name, "u": url, "st": source_type, "c": category})
+                except Exception as e:
+                    logger.warning(f"seed 资讯源 '{name}' 失败: {e}")
+            logger.info(f"已 seed {len(DEFAULT_NEWS_SOURCES)} 个默认资讯源")
 
 
 # ========== 用户相关操作 ==========
