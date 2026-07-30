@@ -387,19 +387,22 @@ def _ensure_default_sensitive_words():
 
 
 # 默认资讯源（首次启动 seed；用户后续可自行增删/启停）
-# 多个 subreddit 用 type=rss，url 用 reddit 官方 RSS 端点；
-# 若直接访问 reddit 被网络屏蔽，可在前端把 url 改为 rsshub / 自建代理镜像。
+# Reddit 类目前在国内网络环境下不可达（GFW 屏蔽 + 所有镜像同步屏蔽）；
+# 用国内可访问的 AI 资讯源作为替代。
+# 注意: 机器之心的 RSS URL 已失效（网站改版），已替换为 InfoQ 中文。
 DEFAULT_NEWS_SOURCES: List[tuple] = [
-    # arXiv 学术
+    # 学术
     ("arXiv CS.AI", "http://export.arxiv.org/rss/cs.AI", "rss", "research"),
     ("arXiv CS.CL", "http://export.arxiv.org/rss/cs.CL", "rss", "research"),
-    # Hacker News 热门
+    # 海外社区
     ("Hacker News", "https://hacker-news.firebaseio.com/v0/topstories.json", "api", "tech"),
-    # Reddit（如果网络不通可改为 rsshub 镜像）
+    # 国内 AI/技术资讯站（替代 Reddit）
+    ("量子位", "https://www.qbitai.com/feed", "rss", "media-cn"),
+    ("36氪", "https://36kr.com/feed", "rss", "media-cn"),
+    ("InfoQ中文", "https://www.infoq.cn/feed.xml", "rss", "media-cn"),
+    # Reddit 类（当前网络不可达，仅作占位；用户有代理时可启用）
     ("Reddit r/MachineLearning",
      "https://www.reddit.com/r/MachineLearning/top.rss?t=day", "rss", "reddit"),
-    ("Reddit r/artificial",
-     "https://www.reddit.com/r/artificial/top.rss?t=day", "rss", "reddit"),
     ("Reddit r/LocalLLaMA",
      "https://www.reddit.com/r/LocalLLaMA/top.rss?t=day", "rss", "reddit"),
 ]
