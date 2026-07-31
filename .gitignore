@@ -59,3 +59,7 @@ __pycache__/
 data/
 *.bak
 images.tar
+
+# 测试产物
+tests/screenshots/
+tests/sample.pdf
