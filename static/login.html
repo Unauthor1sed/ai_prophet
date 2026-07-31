@@ -83,6 +83,13 @@
 const API_BASE = '/api';
 let currentMode = 'login';
 
+// 登录后回跳地址（仅允许站内相对路径，防开放重定向）
+function nextUrl() {
+  const n = new URLSearchParams(location.search).get('next');
+  return (n && n.startsWith('/') && !n.startsWith('//')) ? n : '/index.html';
+}
+
+
 // Tab切换
 function switchTab(mode) {
   currentMode = mode;
@@ -149,7 +156,7 @@ async function handleSubmit(e) {
       if (result.success) {
         const role = result.user.role;
         showMsg('success', `登录成功！欢迎回来，${result.user.username}（${getRoleName(role)}）`);
-        setTimeout(() => { window.location.href = '/index.html'; }, 500);
+        setTimeout(() => { window.location.href = nextUrl(); }, 500);
       }
     } else {
       // 注册
@@ -186,7 +193,7 @@ function getRoleName(role) {
   try {
     const result = await apiRequest('/auth/me');
     if (result.success) {
-      window.location.href = '/index.html';
+      window.location.href = nextUrl();
     }
   } catch (e) { /* 未登录 */ }
 })();

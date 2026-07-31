@@ -96,7 +96,22 @@ async def lifespan(app: FastAPI):
     logger.info("AI先知情报助手服务停止")
 
 
-app = FastAPI(title="AI先知情报助手", lifespan=lifespan)
+# JSON响应显式声明UTF-8：部分内嵌浏览器（如企微webview）对无charset的JSON会用错编码渲染中文
+class UTF8JSONResponse(JSONResponse):
+    media_type = "application/json; charset=utf-8"
+
+
+app = FastAPI(title="AI先知情报助手", lifespan=lifespan,
+              default_response_class=UTF8JSONResponse)
+
+# 错误响应(HTTPException)不走默认响应类，需单独接管以带上charset
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_utf8(request: Request, exc: StarletteHTTPException):
+    return UTF8JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
+                            headers=getattr(exc, "headers", None))
 
 # CORS
 app.add_middleware(
@@ -554,11 +569,18 @@ async def api_get_paper_task(
 # ========== 文件下载 ==========
 
 @app.get("/files/{file_type}/{filename}")
-async def api_download_file(
-    file_type: str, filename: str, request: Request,
-    user: dict = Depends(get_current_user),
-):
-    """下载生成的报告文件（需登录，安全基线需求1000085）"""
+async def api_download_file(file_type: str, filename: str, request: Request):
+    """下载生成的报告文件（需登录，安全基线需求1000085）。
+    浏览器未登录时跳转登录页（登录后自动继续下载），避免手机端直接看到JSON报错"""
+    token = request.cookies.get("session_token") or request.headers.get("Authorization", "").replace("Bearer ", "")
+    user = database.validate_session(token)
+    if not user:
+        # 浏览器请求 → 跳登录页并携带回跳地址；API调用 → 保持401
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
+            from urllib.parse import quote
+            return RedirectResponse(url=f"/login?next={quote(request.url.path)}", status_code=302)
+        raise HTTPException(status_code=401, detail="未登录或会话已过期")
     if file_type == "reports":
         base_dir = os.path.join(DATA_DIR, "reports")
     elif file_type == "papers":
