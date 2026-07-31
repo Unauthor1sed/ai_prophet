@@ -19,6 +19,15 @@ def _get_current_time() -> str:
     return datetime.datetime.now().strftime("%Y年%m月%d日 %H:%M")
 
 
+def _absolute_url(path: str) -> str:
+    """相对路径(/files/...)拼上 PUBLIC_BASE_URL 成为群成员可点击的完整链接；
+    未配置 PUBLIC_BASE_URL 或已是完整URL则原样返回"""
+    if not path or path.startswith("http"):
+        return path
+    base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    return f"{base}{path}" if base else path
+
+
 def _build_morning_report_card(daily_report_url: str, filtered_news: List[Dict[str, Any]]) -> str:
     """构建早报推送卡片（Markdown格式）"""
     now_dt = datetime.datetime.now()
@@ -47,7 +56,13 @@ def _build_morning_report_card(daily_report_url: str, filtered_news: List[Dict[s
 
     lines.append("---")
     lines.append("")
-    lines.append(f"📥 [**点击下载完整早报 (Word)**]({daily_report_url})")
+    full_url = _absolute_url(daily_report_url)
+    if full_url.startswith("http"):
+        lines.append(f"📥 [**点击下载完整早报 (Word)**]({full_url})")
+        lines.append("_（下载需登录系统账号）_")
+    else:
+        # 未配置 PUBLIC_BASE_URL：给文字指引，避免出现点不开的相对链接
+        lines.append("📥 完整早报 (Word)：请登录系统 →「历史早报」页面下载")
     lines.append("")
     lines.append(f"_{_get_current_time()} · 由AI先知智能体自动生成_")
 
@@ -69,7 +84,12 @@ def _build_paper_report_card(paper_report_url: str, paper_analysis: str) -> str:
 
     lines.append("---")
     lines.append("")
-    lines.append(f"📥 [**点击下载完整报告 (Word)**]({paper_report_url})")
+    full_url = _absolute_url(paper_report_url)
+    if full_url.startswith("http"):
+        lines.append(f"📥 [**点击下载完整报告 (Word)**]({full_url})")
+        lines.append("_（下载需登录系统账号）_")
+    else:
+        lines.append("📥 完整报告 (Word)：请登录系统 →「论文精析」页面下载")
     lines.append("")
     lines.append(f"_{_get_current_time()} · 由AI先知智能体自动生成_")
 
