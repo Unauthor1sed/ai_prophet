@@ -53,3 +53,9 @@ __pycache__/
 
 # CodeGraph index
 .codegraph
+
+# 本地环境配置（不在仓库里跟踪）
+1.env
+data/
+*.bak
+images.tar

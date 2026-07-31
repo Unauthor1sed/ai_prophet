@@ -42,8 +42,8 @@ def _get_historical_urls_and_titles() -> Tuple[set, List[str]]:
         seven_days_ago: str = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
         with get_db() as db:
             result = db.execute(text(
-                "SELECT news_url, title FROM news_pool WHERE collected_at >= :days_ago"
-            ), {"days_ago": seven_days_ago})
+                "SELECT url, title FROM news_pool WHERE created_at >= :days_ago"
+            ), {"days_ago": seven_days_ago + " 00:00:00"})
             for row in result.fetchall():
                 url: str = str(row[0] or "")
                 title: str = str(row[1] or "")

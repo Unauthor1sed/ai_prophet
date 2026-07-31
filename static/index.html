@@ -20,6 +20,7 @@
     --error: #ef4444;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
   body {
     background: var(--bg-primary);
     color: var(--text-primary);
@@ -73,7 +74,7 @@
   }
   .logout-btn:hover { background: rgba(239,68,68,0.2); }
   /* 主内容区 */
-  .main { flex: 1; margin-left: 240px; padding: 24px; }
+  .main { flex: 1; margin-left: 240px; padding: 24px; min-width: 0; }
   .page { display: none; }
   .page-title { font-size: 22px; font-weight: 700; margin-bottom: 20px; color: var(--text-primary); }
   /* 统计卡片 */
@@ -100,12 +101,11 @@
     margin-bottom: 16px;
   }
   .card-title { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
-  /* 表单 */
-  .form-row { display: flex; gap: 10px; margin-bottom: 12px; }
+/* 表单 */
+  .form-row { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
   .form-row input, .form-row select {
-    flex: 1; padding: 10px 14px; border-radius: 8px; font-size: 14px;
+    flex: 1 1 120px; min-width: 0; padding: 10px 14px; border-radius: 8px; font-size: 14px;
     background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); color: var(--text-primary);
-    outline: none; font-family: inherit;
   }
   .form-row input:focus, .form-row select:focus { border-color: var(--accent); }
   .btn-primary {
@@ -146,13 +146,14 @@
   }
   .review-comment input:focus { border-color: var(--accent); }
   /* 敏感词 */
-  .word-item { display: flex; align-items: center; gap: 12px; }
-  .word-text { flex: 1; font-size: 14px; }
+  .word-item { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .word-text { flex: 1 1 120px; min-width: 0; font-size: 14px; word-break: break-all; }
   .word-cat { font-size: 12px; color: var(--accent); background: rgba(56,189,248,0.1); padding: 2px 8px; border-radius: 4px; }
   /* 资讯源 */
-  .source-item { display: flex; justify-content: space-between; align-items: center; }
+  .source-item { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+  .source-item > div:first-child { flex: 1 1 200px; min-width: 0; }
   .source-type { font-size: 12px; color: var(--accent2); background: rgba(99,102,241,0.1); padding: 2px 8px; border-radius: 4px; margin-left: 8px; }
-  .source-url { font-size: 12px; color: var(--text-muted); margin-top: 4px; word-break: break-all; }
+  .source-url { font-size: 12px; color: var(--text-muted); margin-top: 4px; word-break: break-all; overflow-wrap: anywhere; max-width: 100%; }
   .source-actions { display: flex; gap: 8px; }
   .source-actions button { padding: 4px 10px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; }
   /* 用户管理 */
@@ -222,6 +223,12 @@
     background: rgba(56,189,248,0.15); color: var(--accent); text-decoration: none; font-size: 13px;
   }
   .btn-download:hover { background: rgba(56,189,248,0.25); }
+  .task-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn-preview {
+    display: inline-block; padding: 8px 16px; border-radius: 6px;
+    background: rgba(148,163,184,0.12); color: var(--text-secondary); text-decoration: none; font-size: 13px;
+  }
+  .btn-preview:hover { background: rgba(148,163,184,0.22); }
   .error-msg { margin-top: 8px; padding: 8px 12px; background: rgba(239,68,68,0.1); border-radius: 6px; color: #f87171; font-size: 12px; }
   .task-time { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
   .paper-task.done { border-color: rgba(34,197,94,0.3); }
@@ -244,7 +251,7 @@
   @media (max-width: 768px) {
     .sidebar { width: 60px; }
     .sidebar-header h2, .menu-item span:not(.icon), .user-info > div, .logout-btn { display: none; }
-    .main { margin-left: 60px; padding: 16px; }
+    .main { margin-left: 60px; padding: 16px; min-width: 0; }
   }
 </style>
 </head>
@@ -317,6 +324,21 @@
         <div class="stat-value" id="stat-sources">-</div>
       </div>
     </div>
+
+    <!-- 管理员手动操作（admin/super_admin 可见） -->
+    <div class="card" id="admin-actions" style="display:none">
+      <div class="card-title">⚙️ 管理员操作</div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom: 12px;">
+        <button class="btn-approve" onclick="triggerDailyNews()" id="btn-trigger-daily">
+          🚀 立即推送今日早报
+        </button>
+        <button class="btn-approve" onclick="triggerIncrementalCollect()" id="btn-trigger-incremental">
+          🔄 立即增量采集
+        </button>
+      </div>
+      <div id="trigger-status" style="font-size:12px; color:var(--text-muted); line-height:1.7"></div>
+    </div>
+
     <div class="card">
       <div class="card-title">系统说明</div>
       <p style="color:var(--text-secondary); font-size:13px; line-height:1.8">
@@ -437,6 +459,6 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="/app.js"></script>
+<script src="/app.js?v=20260730c"></script>
 </body>
 </html>

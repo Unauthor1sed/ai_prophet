@@ -45,7 +45,12 @@ def _strip_html(html: str) -> str:
 
 
 def _load_sources_config(custom_config: Optional[dict]) -> dict:
-    """加载资讯源配置，优先使用自定义配置"""
+    """加载资讯源配置，按优先级：
+    1. 显式传入的 custom_config
+    2. 配置文件 assets/news_sources_cfg.json
+    3. 数据库 news_sources 表（用户在 UI 加的源）
+    4. 内置兜底
+    """
     if custom_config and isinstance(custom_config, dict):
         sources: Optional[list] = custom_config.get("sources")
         if sources and isinstance(sources, list) and len(sources) > 0:
@@ -56,9 +61,32 @@ def _load_sources_config(custom_config: Optional[dict]) -> dict:
             cfg: dict = json.load(f)
         logger.info(f"加载默认资讯源配置: {DEFAULT_SOURCES_CFG}")
         return cfg
-    except Exception as e:
-        logger.warning(f"加载默认配置失败: {e}，使用内置默认源")
-        return _get_builtin_defaults()
+    except Exception:
+        # 文件不存在/解析失败 → fallback 到数据库
+        try:
+            from database import get_news_sources as _get_db_sources
+            db_sources = _get_db_sources()
+            if db_sources:
+                logger.info(f"从数据库加载 {len(db_sources)} 个资讯源")
+                return {
+                    "sources": [
+                        {
+                            "name": s["name"],
+                            "type": s.get("source_type", "rss"),
+                            "url": s["url"],
+                            "enabled": bool(int(s.get("is_active", 1))),
+                            "max_items": 10,
+                            "description": f"DB source ({s.get('category', 'general')})",
+                        }
+                        for s in db_sources
+                    ],
+                    "global": {"max_total_items": 50, "request_timeout": 15},
+                }
+        except Exception as e:
+            logger.warning(f"从数据库加载资讯源失败: {e}")
+
+    logger.warning("加载默认配置失败，使用内置默认源")
+    return _get_builtin_defaults()
 
 
 def _get_builtin_defaults() -> dict:
@@ -105,17 +133,24 @@ def _get_builtin_defaults() -> dict:
     }
 
 
-def _http_get(url: str, timeout: int = 15, headers: Optional[dict] = None) -> Optional[str]:
-    """简单HTTP GET请求"""
+def _http_get(url: str, timeout: int = 15, headers: Optional[dict] = None,
+              retries: int = 2) -> Optional[str]:
+    """简单HTTP GET请求，失败自动重试（共尝试 retries+1 次，间隔递增）"""
     if headers is None:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; AI-Prophet/1.0)"}
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", errors="ignore")
-    except Exception as e:
-        logger.debug(f"HTTP GET {url} failed: {e}")
-        return None
+    last_err: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="ignore")
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                logger.debug(f"HTTP GET {url} 第{attempt + 1}次失败: {e}，重试中")
+                time.sleep((attempt + 1) * 2)
+    logger.warning(f"HTTP GET {url} 重试{retries}次后仍失败: {last_err}")
+    return None
 
 
 def _parse_rss_xml(xml_text: str, source_name: str, max_items: int) -> List[Dict[str, Any]]:

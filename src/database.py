@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, date
 from typing import Optional, Dict, List, Any, Generator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import create_engine, text, inspect, bindparam
 from sqlalchemy.orm import sessionmaker, Session
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,10 @@ def init_database():
     
     # 确保有默认admin账号
     _ensure_default_admin()
+    # 确保有默认敏感词库（仅首次创建时 seed）
+    _ensure_default_sensitive_words()
+    # 确保有默认资讯源（仅首次创建时 seed）
+    _ensure_default_news_sources()
     logger.info("数据库初始化完成")
 
 
@@ -158,7 +162,8 @@ def _init_sqlite():
                 relevance_score REAL DEFAULT 0.5,
                 news_date TEXT NOT NULL DEFAULT (date('now')),
                 published_at TEXT DEFAULT (datetime('now')),
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                is_pushed INTEGER NOT NULL DEFAULT 0
             )
         """))
         
@@ -229,7 +234,16 @@ def _init_sqlite():
             "CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token)",
         ]:
             conn.execute(text(idx_sql))
-        
+
+        # 兼容已有库：补齐新加的列（SQLite 不支持 IF NOT EXISTS for ADD COLUMN）
+        try:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(news_pool)")).fetchall()}
+            if "is_pushed" not in cols:
+                conn.execute(text("ALTER TABLE news_pool ADD COLUMN is_pushed INTEGER NOT NULL DEFAULT 0"))
+                logger.info("为 news_pool 表补充 is_pushed 列")
+        except Exception as e:
+            logger.warning(f"检查/补充 news_pool 列失败（可忽略）: {e}")
+
         conn.commit()
 
 
@@ -333,8 +347,81 @@ def _ensure_default_admin():
         result = db.execute(text("SELECT id FROM users WHERE username = 'admin'")).fetchone()
         if not result:
             db.execute(text(
-                "INSERT INTO users (username, password_hash, role) VALUES (:username, :password_hash, :role)"
-            ), {"username": "admin", "password_hash": hash_password("admin123"), "role": "super_admin"})
+                "INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES (:username, :password_hash, :role, :now, :now)"
+            ), {"username": "admin", "password_hash": hash_password("admin123"), "role": "super_admin", "now": datetime.now()})
+
+
+# 默认敏感词库（首次启动时 seed 一次；之后用户在前端增删的不受影响）
+DEFAULT_SENSITIVE_WORDS: List[tuple] = [
+    ("违禁", "politics"),
+    ("非法", "politics"),
+    ("赌博", "vice"),
+    ("色情", "vice"),
+    ("暴力恐怖", "violence"),
+    ("颠覆国家", "politics"),
+    ("分裂国家", "politics"),
+    ("邪教", "politics"),
+    ("毒品", "vice"),
+    ("枪支", "violence"),
+    ("诈骗", "vice"),
+    ("传销", "vice"),
+    ("洗钱", "vice"),
+    ("盗版", "ip"),
+    ("侵权", "ip"),
+]
+
+
+def _ensure_default_sensitive_words():
+    """首次启动时 seed 默认敏感词库（用户后续可自行增删）"""
+    with get_db() as db:
+        count = db.execute(text("SELECT COUNT(*) FROM sensitive_words")).fetchone()[0]
+        if count == 0:
+            for word, category in DEFAULT_SENSITIVE_WORDS:
+                try:
+                    db.execute(text(
+                        "INSERT INTO sensitive_words (word, category, is_active) VALUES (:w, :c, 1)"
+                    ), {"w": word, "c": category})
+                except Exception as e:
+                    logger.warning(f"seed 敏感词 '{word}' 失败: {e}")
+            logger.info(f"已 seed {len(DEFAULT_SENSITIVE_WORDS)} 个默认敏感词")
+
+
+# 默认资讯源（首次启动 seed；用户后续可自行增删/启停）
+# Reddit 类目前在国内网络环境下不可达（GFW 屏蔽 + 所有镜像同步屏蔽）；
+# 用国内可访问的 AI 资讯源作为替代。
+# 注意: 机器之心的 RSS URL 已失效（网站改版），已替换为 InfoQ 中文。
+DEFAULT_NEWS_SOURCES: List[tuple] = [
+    # 学术
+    ("arXiv CS.AI", "http://export.arxiv.org/rss/cs.AI", "rss", "research"),
+    ("arXiv CS.CL", "http://export.arxiv.org/rss/cs.CL", "rss", "research"),
+    # 海外社区
+    ("Hacker News", "https://hacker-news.firebaseio.com/v0/topstories.json", "api", "tech"),
+    # 国内 AI/技术资讯站（替代 Reddit）
+    ("量子位", "https://www.qbitai.com/feed", "rss", "media-cn"),
+    ("36氪", "https://36kr.com/feed", "rss", "media-cn"),
+    ("InfoQ中文", "https://www.infoq.cn/feed.xml", "rss", "media-cn"),
+    # Reddit 类（当前网络不可达，仅作占位；用户有代理时可启用）
+    ("Reddit r/MachineLearning",
+     "https://www.reddit.com/r/MachineLearning/top.rss?t=day", "rss", "reddit"),
+    ("Reddit r/LocalLLaMA",
+     "https://www.reddit.com/r/LocalLLaMA/top.rss?t=day", "rss", "reddit"),
+]
+
+
+def _ensure_default_news_sources():
+    """首次启动时 seed 默认资讯源（用户后续可自行增删/启停）"""
+    with get_db() as db:
+        count = db.execute(text("SELECT COUNT(*) FROM news_sources")).fetchone()[0]
+        if count == 0:
+            for name, url, source_type, category in DEFAULT_NEWS_SOURCES:
+                try:
+                    db.execute(text(
+                        "INSERT INTO news_sources (name, url, source_type, category, is_active) "
+                        "VALUES (:n, :u, :st, :c, 1)"
+                    ), {"n": name, "u": url, "st": source_type, "c": category})
+                except Exception as e:
+                    logger.warning(f"seed 资讯源 '{name}' 失败: {e}")
+            logger.info(f"已 seed {len(DEFAULT_NEWS_SOURCES)} 个默认资讯源")
 
 
 # ========== 用户相关操作 ==========
@@ -346,8 +433,8 @@ def register_user(username: str, password: str, role: str = "individual") -> Opt
         if existing:
             return None
         db.execute(text(
-            "INSERT INTO users (username, password_hash, role) VALUES (:u, :p, :r)"
-        ), {"u": username, "p": hash_password(password), "r": role})
+            "INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES (:u, :p, :r, :now, :now)"
+        ), {"u": username, "p": hash_password(password), "r": role, "now": datetime.now()})
         db.commit()
         user = db.execute(text("SELECT id, username, role, created_at FROM users WHERE username = :u"), {"u": username}).fetchone()
         return dict(user._mapping) if user else None
@@ -458,6 +545,24 @@ def review_action(review_id: int, action: str, comment: str, reviewer_id: int) -
             UPDATE review_queue SET status = :s, review_comment = :c, reviewer_id = :rid, reviewed_at = :now
             WHERE id = :id
         """), {"s": status, "c": comment, "rid": reviewer_id, "now": datetime.now(), "id": review_id})
+
+        # 审核通过 → 写入待发池，下次早报作为"历史审核通过资讯"收录（完成人工复核闭环）
+        if status == "approved":
+            row = db.execute(text(
+                "SELECT title, url, source, summary FROM review_queue WHERE id = :id"
+            ), {"id": review_id}).fetchone()
+            if row and row[1]:
+                existing_news = db.execute(
+                    text("SELECT id FROM news_pool WHERE url = :u"), {"u": row[1]}).fetchone()
+                if not existing_news:
+                    db.execute(text("""
+                        INSERT INTO news_pool (title, summary, url, source, news_date, relevance_score, created_at)
+                        VALUES (:title, :summary, :url, :source, :news_date, 0.5, :now)
+                    """), {
+                        "title": row[0], "summary": row[3] or "", "url": row[1],
+                        "source": row[2] or "", "news_date": date.today().isoformat(),
+                        "now": datetime.now(),
+                    })
         return True
 
 
@@ -574,20 +679,25 @@ def insert_news_pool(item: Dict[str, Any]) -> int:
 
 def insert_review_queue(news_id: int, item_type: str, content_snapshot: Dict[str, Any],
                         trigger_reason: str = "") -> int:
-    """插入审核队列"""
+    """插入审核队列（使用现有 SQLite schema 列）"""
     with get_db() as db:
-        existing = db.execute(text(
-            "SELECT id FROM review_queue WHERE item_id = :nid AND item_type = :t AND status = 'pending'"
-        ), {"nid": news_id, "t": item_type}).fetchone()
-        if existing:
-            return int(existing[0])
+        url: str = str(content_snapshot.get("news_url", "") or content_snapshot.get("url", ""))
+        if url:
+            existing = db.execute(text(
+                "SELECT id FROM review_queue WHERE url = :u AND status = 'pending' LIMIT 1"
+            ), {"u": url}).fetchone()
+            if existing:
+                return int(existing[0])
         result = db.execute(text("""
-            INSERT INTO review_queue (item_id, item_type, content_snapshot, trigger_reason, status, created_at)
-            VALUES (:item_id, :item_type, :snapshot, :reason, 'pending', :now)
+            INSERT INTO review_queue (title, url, source, summary, status, fact_check_result, created_at)
+            VALUES (:title, :url, :source, :summary, 'pending', :snapshot, :now)
         """), {
-            "item_id": news_id, "item_type": item_type,
+            "title": str(content_snapshot.get("title", ""))[:500] or "(无标题)",
+            "url": url,
+            "source": str(content_snapshot.get("site_name", "") or content_snapshot.get("source", ""))[:200],
+            "summary": str(content_snapshot.get("audit_reason", trigger_reason or ""))[:2000],
             "snapshot": json.dumps(content_snapshot, ensure_ascii=False),
-            "reason": trigger_reason, "now": datetime.now()
+            "now": datetime.now(),
         })
         return int(result.lastrowid or 0)
 
@@ -597,18 +707,25 @@ def get_review_queue_by_url(url: str) -> Optional[Dict[str, Any]]:
     if not url:
         return None
     with get_db() as db:
-        row = db.execute(text("""
-            SELECT rq.* FROM review_queue rq
-            JOIN news_pool np ON np.id = rq.item_id AND rq.item_type = 'news'
-            WHERE np.url = :u LIMIT 1
-        """), {"u": url}).fetchone()
+        row = db.execute(text(
+            "SELECT * FROM review_queue WHERE url = :u AND status = 'pending' LIMIT 1"
+        ), {"u": url}).fetchone()
         return dict(row._mapping) if row else None
 
 
-def news_pool_mark_pushed(news_id: int) -> None:
-    """标记新闻已推送到早报"""
+def news_pool_mark_pushed(news_ids) -> None:
+    """标记新闻已推送到早报（接受单个 int 或 int 列表）"""
+    if isinstance(news_ids, (int, str)):
+        news_ids = [news_ids]
+    if not news_ids:
+        return
     with get_db() as db:
-        db.execute(text("UPDATE news_pool SET is_pushed = 1 WHERE id = :id"), {"id": news_id})
+        db.execute(
+            text("UPDATE news_pool SET is_pushed = 1 WHERE id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": list(news_ids)},
+        )
 
 
 def get_available_dates() -> List[str]:
@@ -644,10 +761,11 @@ def create_paper_task(user_id: int, username: str, title: str, filename: str, pa
     """创建论文分析任务"""
     with get_db() as db:
         result = db.execute(text("""
-            INSERT INTO paper_tasks (user_id, username, title, original_filename, paper_path, status, progress, progress_msg)
-            VALUES (:uid, :un, :t, :fn, :pp, 'pending', 0, '等待处理')
+            INSERT INTO paper_tasks (user_id, username, title, original_filename, paper_path, status, progress, progress_msg, created_at, updated_at)
+            VALUES (:uid, :un, :t, :fn, :pp, 'pending', 0, '等待处理', :now, :now)
             RETURNING id
-        """), {"uid": user_id, "un": username, "t": title, "fn": filename, "pp": paper_path})
+        """), {"uid": user_id, "un": username, "t": title, "fn": filename, "pp": paper_path,
+               "now": datetime.now()})
         task_id = result.fetchone()[0]
         db.commit()
         return task_id
@@ -658,23 +776,24 @@ def get_paper_tasks(user_id: Optional[int] = None, limit: int = 20) -> List[Dict
     with get_db() as db:
         if user_id:
             rows = db.execute(text("""
-                SELECT id, title, original_filename, status, progress, progress_msg, 
+                SELECT id, title, original_filename, status, progress, progress_msg,
                        analysis_result, report_path, error_msg, created_at, completed_at
                 FROM paper_tasks WHERE user_id = :uid ORDER BY created_at DESC LIMIT :lim
             """), {"uid": user_id, "lim": limit}).fetchall()
         else:
+            # 超级管理员视图：也读 report_path（之前漏了，导致 download 按钮不显示）
             rows = db.execute(text("""
-                SELECT id, user_id, username, title, original_filename, status, progress, progress_msg, 
-                       error_msg, created_at, completed_at
+                SELECT id, user_id, username, title, original_filename, status, progress, progress_msg,
+                       report_path, error_msg, created_at, completed_at
                 FROM paper_tasks ORDER BY created_at DESC LIMIT :lim
             """), {"lim": limit}).fetchall()
         tasks = []
         for r in rows:
             t = dict(r._mapping)
-            # 将report_path转为下载URL
+            # 将 report_path 转为下载 URL（与 main.py @app.get("/files/{file_type}/{filename}") 一致）
             if t.get("report_path"):
                 fname = os.path.basename(t["report_path"])
-                t["report_url"] = f"/api/files/reports/{fname}"
+                t["report_url"] = f"/files/reports/{fname}"
             tasks.append(t)
         return tasks
 

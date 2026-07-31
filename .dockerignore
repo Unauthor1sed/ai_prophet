@@ -1,0 +1,20 @@
+# 构建镜像时排除，避免把大文件/敏感文件打进构建上下文
+.git
+.gitignore
+.env
+1.env
+*.env
+images.tar
+*.tar
+data/
+node_modules
+__pycache__
+*.pyc
+.venv
+.DS_Store
+*.md
+assets/*.png
+scripts/
+uv.lock
+.coze
+.cozeproj

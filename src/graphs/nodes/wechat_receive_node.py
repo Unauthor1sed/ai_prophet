@@ -30,7 +30,8 @@ def wechat_receive_node(state: WechatReceiveInput, config: RunnableConfig, runti
             workflow_mode=preset_mode,
             paper_file=state.paper_file,
             search_keywords=state.search_keywords if state.search_keywords else [],
-            trigger_source="manual" if state.workflow_mode else "manual",
+            # 透传上游触发来源（schedule/incremental等），否则会覆盖掉调度器传入的值
+            trigger_source=state.trigger_source or "manual",
             skip_wechat_push=state.skip_wechat_push,
         )
 

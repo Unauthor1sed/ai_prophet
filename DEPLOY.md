@@ -57,8 +57,17 @@ JWT_SECRET=改成一段随机字符串        # 建议用 openssl rand -hex 32 �
 ```
 其他配置通常保持默认即可。
 
-### 3. 构建并启动
-在项目目录下执行（第一次构建约 3-5 分钟，取决于网速）：
+### 3. 启动
+
+**方式 A：离线镜像（推荐，交付包中含 `images.tar`）**
+
+无需联网构建，直接导入镜像后启动：
+```bash
+docker load -i images.tar
+docker compose up -d
+```
+
+**方式 B：本地构建**（需要能拉取 python:3.11-slim 基础镜像，约 3-5 分钟）：
 ```bash
 docker compose up -d --build
 ```
@@ -70,7 +79,7 @@ docker compose logs -f
 看到 `Uvicorn running on http://0.0.0.0:8000` 和 `数据库初始化完成` 即成功。
 
 ### 4. 访问系统
-浏览器打开：http://localhost/（默认端口 80）
+浏览器打开：http://localhost:8080/（默认端口 8080，可在 `.env` 中用 `PORT` 修改）
 
 **默认超级管理员账号**：
 - 用户名：`admin`
@@ -102,6 +111,14 @@ docker compose pull        # 更新镜像（一般用不到）
 ---
 
 ## 五、常见问题
+
+### Q0: 容器启动后 LLM 调用 / 资讯采集 / 企微推送全部失败（域名解析失败）？
+部分环境下（尤其 Docker Desktop 配置过代理、或宿主机 DNS 探测失败时），
+compose 自定义网络的容器内置 DNS 没有上游服务器，容器内所有域名都无法解析。
+本项目 `docker-compose.yml` 已通过给服务显式配置 `dns:`（223.5.5.5 等公共 DNS）修复。
+容器启动日志里会打印「网络自检: DNS 解析正常」；若看到 DNS 失败警告：
+1. 确认使用的是本项目自带的 `docker-compose.yml`（含 `dns:` 配置）；
+2. 检查 Docker Desktop → Settings → Resources → Proxies 中是否配置了已失效的代理，如有请清除后重启 Docker。
 
 ### Q1: `docker compose up --build` 卡在拉取镜像？
 本项目 Dockerfile 已使用阿里云镜像源 `registry.cn-hangzhou.aliyuncs.com/library/python:3.11-slim`，理论上国内直连。若仍卡住，请检查 Docker Desktop 的网络代理设置，或配置 Docker 镜像加速器：

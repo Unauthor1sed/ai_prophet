@@ -11,6 +11,7 @@ from langgraph.runtime import Runtime
 from coze_coding_utils.runtime_ctx.context import Context
 from graphs.state import DailyReportGenInput, DailyReportGenOutput
 from database import get_db, news_pool_mark_pushed
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -37,17 +38,24 @@ def daily_report_gen_node(state: DailyReportGenInput, config: RunnableConfig, ru
     ctx = runtime.context
     news_pool: List[Dict[str, Any]] = state.news_pool
 
+    now_dt = datetime.datetime.now()
+    today_date: datetime.date = now_dt.date()
+
     # 如果 state 中没有传入 news_pool，从数据库读取
     if not news_pool:
         try:
-            db = get_db()
-            rows = db.execute(
-                """SELECT * FROM news_pool WHERE is_pushed = %s ORDER BY importance ASC, approved_at DESC""",
-                (False,)
-            ).fetchall()
-            col_names = [desc[0] for desc in db.description]
-            news_pool = [dict(zip(col_names, row)) for row in rows]
-            logger.info(f"从数据库读取待发池: {len(news_pool)} 条")
+            today_iso: str = today_date.isoformat()
+            with get_db() as db:
+                result = db.execute(text(
+                    """SELECT id, title, summary, url, source, relevance_score, news_date, created_at
+                       FROM news_pool
+                       WHERE news_date = :today
+                       ORDER BY relevance_score DESC, created_at DESC"""
+                ), {"today": today_iso})
+                col_names: List[str] = list(result.keys())
+                rows = result.fetchall()
+                news_pool = [dict(zip(col_names, row)) for row in rows]
+                logger.info(f"从数据库读取待发池: {len(news_pool)} 条")
         except Exception as e:
             logger.error(f"读取待发池失败: {e}")
 
@@ -66,8 +74,6 @@ def daily_report_gen_node(state: DailyReportGenInput, config: RunnableConfig, ru
 
     news_pool.sort(key=lambda x: (_get_importance_order(str(x.get("importance", "medium"))), -_safe_score(x)))
 
-    now_dt = datetime.datetime.now()
-    today_date: datetime.date = now_dt.date()
     now_str: str = now_dt.strftime("%Y年%m月%d日")
     weekday: str = ["一", "二", "三", "四", "五", "六", "日"][now_dt.weekday()]
     now_ts: str = now_dt.strftime("%Y%m%d_%H%M%S")

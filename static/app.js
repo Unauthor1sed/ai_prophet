@@ -107,8 +107,58 @@ async function loadDashboard() {
     document.getElementById('stat-pending').textContent = reviewStats.pending || 0;
     document.getElementById('stat-users').textContent = stats.total_users || 0;
     document.getElementById('stat-sources').textContent = stats.total_sources || 0;
+
+    // 管理员操作区显示（admin / super_admin 才显示）
+    const role = currentUser && currentUser.role;
+    const adminBox = document.getElementById('admin-actions');
+    if (adminBox && (role === 'admin' || role === 'super_admin')) {
+      adminBox.style.display = 'block';
+    }
   } catch (e) {
     showToast('加载统计失败: ' + e.message, 'error');
+  }
+}
+
+// ====== 管理员手动触发 ======
+function _setTriggerStatus(text, isError) {
+  const el = document.getElementById('trigger-status');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? '#f87171' : 'var(--text-muted)';
+}
+
+async function triggerDailyNews() {
+  const btn = document.getElementById('btn-trigger-daily');
+  if (!confirm('确认立即触发一次早报推送？\n\n会执行：采集→去重→筛选→翻译→审核→生成 Word→推送企业微信')) return;
+  btn.disabled = true;
+  btn.textContent = '⏳ 推送中…';
+  _setTriggerStatus('已加入后台队列，请稍后到「历史早报」查看结果（约 1-3 分钟）', false);
+  try {
+    const r = await api('/admin/trigger/daily-news', { method: 'POST' });
+    showToast(r.message || '已触发', 'success');
+  } catch (e) {
+    _setTriggerStatus('触发失败: ' + e.message, true);
+    showToast(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🚀 立即推送今日早报';
+  }
+}
+
+async function triggerIncrementalCollect() {
+  const btn = document.getElementById('btn-trigger-incremental');
+  btn.disabled = true;
+  btn.textContent = '⏳ 采集中…';
+  _setTriggerStatus('已加入后台队列，增量采集完成后会自动推送到审核群', false);
+  try {
+    const r = await api('/admin/trigger/incremental-collect', { method: 'POST' });
+    showToast(r.message || '已触发', 'success');
+  } catch (e) {
+    _setTriggerStatus('触发失败: ' + e.message, true);
+    showToast(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 立即增量采集';
   }
 }
 
@@ -340,6 +390,8 @@ async function submitPaper() {
     showToast('论文已提交，开始分析！', 'success');
     fileInput.value = '';
     titleInput.value = '';
+    const hint = document.getElementById('file-hint');
+    if (hint) { hint.textContent = '支持PDF格式，最大50MB'; hint.style.color = ''; }
     loadPaperTasks();
     startPolling();
   } catch (e) {
@@ -373,7 +425,16 @@ async function loadPaperTasks() {
           <div class="progress-bar"><div class="progress-fill" style="width:${t.progress}%"></div></div>
           <div class="progress-text">${escapeHtml(t.progress_msg || '')}</div>
           ${t.analysis_result ? `<div class="task-result"><pre>${escapeHtml(t.analysis_result.substring(0, 2000))}</pre></div>` : ''}
-          ${t.report_url ? `<a href="${t.report_url}" target="_blank" class="btn-download">📄 下载完整报告</a>` : ''}
+          ${t.report_url ? `
+            <div class="task-actions">
+              <a href="${t.report_url}" download="${escapeHtml((t.title || 'paper_report') + '.docx')}" class="btn-download">
+                ⬇️ 下载完整报告 (Word)
+              </a>
+              <a href="${t.report_url}" target="_blank" class="btn-preview">
+                👁️ 在新窗口打开
+              </a>
+            </div>
+          ` : ''}
           ${t.error_msg ? `<div class="error-msg">错误: ${escapeHtml(t.error_msg)}</div>` : ''}
           <div class="task-time">提交时间: ${formatDate(t.created_at)}</div>
         </div>
@@ -409,4 +470,22 @@ function stopPolling() {
 // ====== 初始化 ======
 document.addEventListener('DOMContentLoaded', () => {
   checkAuth();
+
+  // 论文PDF选择反馈：选中后显示文件名和大小，避免"选了没反应"
+  const paperFileInput = document.getElementById('paper-file');
+  if (paperFileInput) {
+    paperFileInput.addEventListener('change', () => {
+      const hint = document.getElementById('file-hint');
+      const file = paperFileInput.files[0];
+      if (!hint) return;
+      if (file) {
+        const sizeMb = (file.size / 1024 / 1024).toFixed(2);
+        hint.textContent = `已选择：${file.name}（${sizeMb} MB），点击"提交分析"开始`;
+        hint.style.color = '#4ade80';
+      } else {
+        hint.textContent = '支持PDF格式，最大50MB';
+        hint.style.color = '';
+      }
+    });
+  }
 });
