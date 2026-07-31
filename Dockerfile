@@ -43,6 +43,7 @@ COPY src/ /app/src/
 COPY static/ /app/static/
 COPY config/ /app/config/
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh
 
 # 启动脚本权限 + 数据目录
 RUN chmod +x /app/docker-entrypoint.sh && \
