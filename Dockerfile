@@ -6,7 +6,10 @@
 #   2. FROM 使用官方镜像名 python:3.11-slim，Docker 会走加速器拉取
 #   3. pip 走清华源，国内构建顺畅
 # ============================================================
-FROM python:3.11-slim
+# 基础镜像可通过 --build-arg 覆盖（离线双架构构建时用：
+#   amd64: --platform linux/amd64 --build-arg BASE_IMAGE=python-amd64:3.11-slim）
+ARG BASE_IMAGE=python:3.11-slim
+FROM ${BASE_IMAGE}
 
 LABEL maintainer="AI Prophet"
 LABEL description="AI先知情报智能体 - 单容器部署版（SQLite+FastAPI静态托管）"

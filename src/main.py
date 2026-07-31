@@ -123,9 +123,11 @@ async def api_login(request: LoginRequest, response: Response):
     if not user:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = database.create_session(user["id"])
+    # SESSION_COOKIE_SECURE=1 时启用 Secure 属性（HTTPS 部署场景）
     response.set_cookie(
         key="session_token", value=token,
-        max_age=7*24*3600, httponly=True, samesite="lax"
+        max_age=7*24*3600, httponly=True, samesite="lax",
+        secure=os.getenv("SESSION_COOKIE_SECURE", "") in ("1", "true", "yes"),
     )
     return {"success": True, "user": user}
 
@@ -209,6 +211,18 @@ async def api_trigger_incremental_collect(
     }
 
 
+@app.get("/api/admin/task-runs")
+async def api_task_runs(
+    task_type: Optional[str] = None,
+    status: Optional[str] = None,
+    date: Optional[str] = None,
+    limit: int = 50,
+    user: dict = Depends(require_role("admin", "super_admin")),
+):
+    """全流程执行记录查询（需求1000089）：按类型/状态/日期过滤 + 当日成功率"""
+    return {"success": True, **database.get_task_runs(task_type, status, date, min(limit, 200))}
+
+
 # ========== 审核API ==========
 
 @app.get("/api/reviews")
@@ -230,10 +244,25 @@ async def api_review_action(
 ):
     if action.action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="无效的操作类型")
+    # 驳回必须填写不少于10个字的原因（需求1000102）
+    if action.action == "reject" and len(action.comment.strip()) < 10:
+        raise HTTPException(status_code=400, detail="驳回时必须填写原因（不少于10个字）")
     ok = database.review_action(review_id, action.action, action.comment, user["id"])
     if not ok:
         raise HTTPException(status_code=400, detail="审核失败（任务不存在或已处理）")
     return {"success": True}
+
+
+@app.get("/api/reviews/history")
+async def api_review_history(
+    status: Optional[str] = None,
+    date: Optional[str] = None,
+    keyword: Optional[str] = None,
+    limit: int = 100,
+    user: dict = Depends(require_role("reviewer", "admin", "super_admin"))
+):
+    """审核历史查询：按状态(approved/rejected)、日期、关键词过滤"""
+    return {"success": True, "items": database.get_review_history(status, date, keyword, min(limit, 500))}
 
 
 # ========== 敏感词API ==========
@@ -265,6 +294,55 @@ async def api_delete_sensitive_word(
     if not ok:
         raise HTTPException(status_code=404, detail="敏感词不存在")
     return {"success": True}
+
+
+@app.put("/api/sensitive-words/{word_id}")
+async def api_update_sensitive_word(
+    word_id: int, req: SensitiveWordRequest,
+    user: dict = Depends(require_role("admin", "super_admin"))
+):
+    word = req.word.strip()
+    if not word:
+        raise HTTPException(status_code=400, detail="敏感词不能为空")
+    ok = database.update_sensitive_word(word_id, word, req.category)
+    if not ok:
+        raise HTTPException(status_code=404, detail="敏感词不存在")
+    return {"success": True}
+
+
+@app.get("/api/sensitive-words/template")
+async def api_sensitive_words_template(
+    user: dict = Depends(require_role("admin", "super_admin"))
+):
+    """下载批量导入模板（CSV：词条,分类）"""
+    content = "# 敏感词导入模板：每行一个词条，格式：词条,分类（分类可省略，默认general）\n示例敏感词1,political\n示例敏感词2,violence\n示例敏感词3\n"
+    return Response(
+        content=content.encode("utf-8-sig"),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=sensitive_words_template.csv"},
+    )
+
+
+@app.post("/api/sensitive-words/import")
+async def api_import_sensitive_words(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_role("admin", "super_admin"))
+):
+    """批量导入敏感词（TXT每行一个 / CSV: 词条,分类）"""
+    if not file.filename or not file.filename.lower().endswith((".txt", ".csv")):
+        raise HTTPException(status_code=400, detail="仅支持 TXT / CSV 文件")
+    raw = await file.read()
+    if len(raw) > 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件不能超过1MB")
+    try:
+        text_content = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text_content = raw.decode("gbk")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="文件编码无法识别（请用UTF-8或GBK）")
+    result = database.import_sensitive_words(text_content.splitlines())
+    return {"success": True, **result}
 
 
 # ========== 资讯源API ==========
@@ -307,6 +385,67 @@ async def api_delete_news_source(
     if not ok:
         raise HTTPException(status_code=404, detail="资讯源不存在")
     return {"success": True}
+
+
+@app.put("/api/news-sources/{source_id}")
+async def api_update_news_source(
+    source_id: int, req: NewsSourceRequest,
+    user: dict = Depends(require_role("admin", "super_admin"))
+):
+    if not req.name.strip() or not req.url.strip():
+        raise HTTPException(status_code=400, detail="名称和URL不能为空")
+    ok = database.update_news_source(source_id, req.name.strip(), req.url.strip(), req.source_type, req.category)
+    if not ok:
+        raise HTTPException(status_code=404, detail="资讯源不存在")
+    return {"success": True}
+
+
+@app.post("/api/news-sources/test")
+async def api_test_news_source(
+    req: NewsSourceRequest,
+    user: dict = Depends(require_role("admin", "super_admin"))
+):
+    """保存前连通性测试：校验地址可达性与格式（RSS/API）"""
+    import urllib.request
+    import urllib.error
+    import json as _json
+    from xml.etree import ElementTree as _ET
+
+    url = req.url.strip()
+    if not url.startswith(("http://", "https://")):
+        return {"success": False, "result": "invalid_url", "message": "地址无效：必须以 http(s):// 开头"}
+    try:
+        r = urllib.request.urlopen(
+            urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AI-Prophet/1.0)"}),
+            timeout=10,
+        )
+        body = r.read(512 * 1024).decode("utf-8", errors="ignore")
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return {"success": False, "result": "auth_failed", "message": f"认证失败（HTTP {e.code}）"}
+        return {"success": False, "result": "http_error", "message": f"HTTP错误：{e.code}"}
+    except Exception as e:
+        msg = str(e)
+        if "timed out" in msg.lower() or "timeout" in msg.lower():
+            return {"success": False, "result": "timeout", "message": "连接超时（10秒）"}
+        return {"success": False, "result": "unreachable", "message": f"无法连接：{msg[:100]}"}
+
+    if req.source_type == "rss":
+        try:
+            root = _ET.fromstring(body.strip())
+            tag = root.tag.lower()
+            if "rss" in tag or "feed" in tag:
+                return {"success": True, "result": "ok", "message": "连通正常，RSS/Atom 格式有效"}
+            return {"success": False, "result": "format_error", "message": f"可访问但不是RSS/Atom格式（根节点: {root.tag}）"}
+        except _ET.ParseError:
+            return {"success": False, "result": "format_error", "message": "可访问但内容不是有效的XML/RSS"}
+    if req.source_type == "api":
+        try:
+            _json.loads(body)
+            return {"success": True, "result": "ok", "message": "连通正常，JSON 格式有效"}
+        except _json.JSONDecodeError:
+            return {"success": False, "result": "format_error", "message": "可访问但返回内容不是有效JSON"}
+    return {"success": True, "result": "ok", "message": "地址可访问"}
 
 
 # ========== 用户管理API（超管） ==========
@@ -415,8 +554,11 @@ async def api_get_paper_task(
 # ========== 文件下载 ==========
 
 @app.get("/files/{file_type}/{filename}")
-async def api_download_file(file_type: str, filename: str, request: Request):
-    """下载生成的报告文件"""
+async def api_download_file(
+    file_type: str, filename: str, request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """下载生成的报告文件（需登录，安全基线需求1000085）"""
     if file_type == "reports":
         base_dir = os.path.join(DATA_DIR, "reports")
     elif file_type == "papers":

@@ -70,7 +70,7 @@ function navigateTo(page) {
 function loadPageData(page) {
   switch(page) {
     case 'dashboard': loadDashboard(); break;
-    case 'review': loadReviews(); break;
+    case 'review': loadReviews(); loadReviewHistory(); break;
     case 'words': loadSensitiveWords(); break;
     case 'sources': loadNewsSources(); break;
     case 'users': loadUsers(); break;
@@ -113,9 +113,35 @@ async function loadDashboard() {
     const adminBox = document.getElementById('admin-actions');
     if (adminBox && (role === 'admin' || role === 'super_admin')) {
       adminBox.style.display = 'block';
+      loadTaskRuns();
     }
   } catch (e) {
     showToast('加载统计失败: ' + e.message, 'error');
+  }
+}
+
+// ====== 执行记录（管理员） ======
+async function loadTaskRuns() {
+  const box = document.getElementById('task-runs');
+  if (!box) return;
+  try {
+    const data = await api('/admin/task-runs?limit=15');
+    const rate = data.today_success_rate === null ? '-' : Math.round(data.today_success_rate * 100) + '%';
+    const items = data.items || [];
+    const statusMap = { running: '⏳ 运行中', success: '✅ 成功', partial: '⚠️ 部分成功', failed: '❌ 失败' };
+    box.innerHTML = `
+      <div class="upload-hint" style="margin-bottom:8px">今日执行 ${data.today_total} 次，成功率 ${rate}</div>
+      ${items.length === 0 ? '<div class="empty-state"><p>暂无执行记录</p></div>' : items.map(r => `
+        <div class="review-header" style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06)">
+          <span class="source-tag">${escapeHtml(r.task_type)}</span>
+          <span>${statusMap[r.status] || escapeHtml(r.status)}</span>
+          <span class="time">采集${r.items_collected}条 → 入选${r.items_filtered}条</span>
+          <span class="time">${formatDate(r.started_at)}</span>
+          ${r.error_msg ? `<span class="time" style="color:#f87171">${escapeHtml(r.error_msg.slice(0, 40))}</span>` : ''}
+        </div>`).join('')}
+    `;
+  } catch (e) {
+    box.innerHTML = `<p style="color:#f87171">${escapeHtml(e.message)}</p>`;
   }
 }
 
@@ -198,6 +224,11 @@ async function loadReviews() {
 
 async function handleReview(id, action) {
   const comment = document.getElementById('comment-' + id)?.value || '';
+  if (action === 'reject' && comment.trim().length < 10) {
+    showToast('驳回时必须填写原因（不少于10个字）', 'error');
+    document.getElementById('comment-' + id)?.focus();
+    return;
+  }
   try {
     await api(`/reviews/${id}/action`, { method: 'POST', body: { action, comment } });
     showToast(action === 'approve' ? '已通过' : '已拒绝', 'success');
@@ -205,6 +236,40 @@ async function handleReview(id, action) {
     loadDashboard();
   } catch (e) {
     showToast('操作失败: ' + e.message, 'error');
+  }
+}
+
+// ====== 审核历史 ======
+async function loadReviewHistory() {
+  const container = document.getElementById('review-history-list');
+  if (!container) return;
+  const status = document.getElementById('history-status')?.value || '';
+  const kw = document.getElementById('history-keyword')?.value || '';
+  container.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
+  try {
+    const params = new URLSearchParams();
+    if (status) params.set('status', status);
+    if (kw) params.set('keyword', kw);
+    const data = await api('/reviews/history?' + params.toString());
+    const items = data.items || [];
+    if (items.length === 0) {
+      container.innerHTML = '<div class="empty-state"><p>暂无审核记录</p></div>';
+      return;
+    }
+    container.innerHTML = items.map(item => `
+      <div class="review-card">
+        <div class="review-header">
+          <span class="source-tag">${item.status === 'approved' ? '✅ 已通过' : '❌ 已驳回'}</span>
+          <span class="source-tag">${escapeHtml(item.source || '未知来源')}</span>
+          <span class="time">审核人: ${escapeHtml(item.reviewer || '-')} · ${formatDate(item.reviewed_at)}</span>
+        </div>
+        <h4>${escapeHtml(item.title)}</h4>
+        ${item.review_comment ? `<p class="summary">备注: ${escapeHtml(item.review_comment)}</p>` : ''}
+        <a href="${escapeHtml(item.url)}" target="_blank" class="btn-view">查看原文</a>
+      </div>
+    `).join('');
+  } catch (e) {
+    container.innerHTML = `<div class="empty-state"><p style="color:#f87171">加载失败: ${escapeHtml(e.message)}</p></div>`;
   }
 }
 
@@ -223,12 +288,44 @@ async function loadSensitiveWords() {
       <div class="word-item">
         <span class="word-text">${escapeHtml(w.word)}</span>
         <span class="word-cat">${escapeHtml(w.category)}</span>
+        <button class="btn-view" onclick="editWord(${w.id}, this)">编辑</button>
         <button class="btn-del" onclick="deleteWord(${w.id})">删除</button>
       </div>
     `).join('');
   } catch (e) {
     container.innerHTML = `<p style="color:#f87171">${escapeHtml(e.message)}</p>`;
   }
+}
+
+async function editWord(id, btn) {
+  const item = btn.closest('.word-item');
+  const oldWord = item.querySelector('.word-text').textContent;
+  const oldCat = item.querySelector('.word-cat').textContent;
+  const word = prompt('修改敏感词：', oldWord);
+  if (word === null) return;
+  if (!word.trim()) return showToast('敏感词不能为空', 'error');
+  const category = prompt('修改分类（general/political/violence/porn/ad等）：', oldCat) || oldCat;
+  try {
+    await api(`/sensitive-words/${id}`, { method: 'PUT', body: { word: word.trim(), category } });
+    showToast('修改成功', 'success');
+    loadSensitiveWords();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function importWords() {
+  const input = document.getElementById('words-import-file');
+  const file = input?.files[0];
+  if (!file) return showToast('请先选择 TXT/CSV 文件', 'error');
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await api('/sensitive-words/import', { method: 'POST', body: fd });
+    let msg = `导入完成：新增 ${r.added} 个，跳过重复 ${r.skipped_duplicates} 个`;
+    if (r.errors && r.errors.length) msg += `，错误 ${r.errors.length} 行：` + r.errors.slice(0, 3).join('；');
+    showToast(msg, r.errors && r.errors.length ? 'error' : 'success');
+    input.value = '';
+    loadSensitiveWords();
+  } catch (e) { showToast('导入失败: ' + e.message, 'error'); }
 }
 
 async function addWord() {
@@ -268,6 +365,8 @@ async function loadNewsSources() {
           <div class="source-url">${escapeHtml(s.url)}</div>
         </div>
         <div class="source-actions">
+          <button class="btn-view" onclick="testSourceById('${escapeHtml(s.url)}', '${escapeHtml(s.source_type)}', this)">测试</button>
+          <button class="btn-view" onclick="editSource(${s.id}, this)" data-name="${escapeHtml(s.name)}" data-url="${escapeHtml(s.url)}" data-type="${escapeHtml(s.source_type)}">编辑</button>
           <button class="${s.is_active ? 'btn-reject' : 'btn-approve'}" onclick="toggleSource(${s.id})">${s.is_active ? '禁用' : '启用'}</button>
           <button class="btn-del" onclick="deleteSource(${s.id})">删除</button>
         </div>
@@ -276,10 +375,45 @@ async function loadNewsSources() {
   } catch (e) { container.innerHTML = `<p style="color:#f87171">${escapeHtml(e.message)}</p>`; }
 }
 
+async function testSource(url, sourceType) {
+  return api('/news-sources/test', { method: 'POST', body: { name: 'test', url, source_type: sourceType || 'rss' } });
+}
+
+async function testSourceById(url, sourceType, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '测试中...';
+  try {
+    const r = await testSource(url, sourceType);
+    showToast(r.message, r.success ? 'success' : 'error');
+  } catch (e) { showToast('测试失败: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = orig; }
+}
+
+async function editSource(id, btn) {
+  const name = prompt('修改名称：', btn.dataset.name);
+  if (name === null) return;
+  const url = prompt('修改URL：', btn.dataset.url);
+  if (url === null) return;
+  const type = prompt('类型（rss/api）：', btn.dataset.type) || btn.dataset.type;
+  if (!name.trim() || !url.trim()) return showToast('名称和URL不能为空', 'error');
+  try {
+    await api(`/news-sources/${id}`, { method: 'PUT', body: { name: name.trim(), url: url.trim(), source_type: type } });
+    showToast('修改成功', 'success');
+    loadNewsSources();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
 async function addSource() {
   const name = document.getElementById('new-source-name').value.trim();
   const url = document.getElementById('new-source-url').value.trim();
   if (!name || !url) return showToast('请填写名称和URL', 'error');
+  // 保存前连通性测试：无效源不入库（需求1000094）
+  try {
+    const t = await testSource(url, 'rss');
+    if (!t.success) {
+      if (!confirm(`连通性测试未通过：${t.message}\n仍要保存吗？`)) return;
+    }
+  } catch (e) { /* 测试接口异常不阻塞保存 */ }
   try {
     await api('/news-sources', { method: 'POST', body: { name, url } });
     document.getElementById('new-source-name').value = '';

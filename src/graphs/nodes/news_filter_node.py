@@ -81,8 +81,21 @@ def news_filter_node(state: NewsFilterInput, config: RunnableConfig, runtime: Ru
                 })
         filtered_news = passed
     except Exception as e:
-        logger.warning(f"LLM调用或解析失败，使用原始数据: {e}")
-        filtered_news = deduped_news[:10]
+        # 降级策略：不绕过阈值直接放行——保留前10条但全部标记"筛选降级"，
+        # 下游敏感词/事实校验照常执行；降级标记会在事实校验中体现为需人工关注
+        logger.error(f"筛选LLM调用失败，进入降级模式（保留前10条并标记降级）: {e}")
+        try:
+            from utils.alert import send_alert
+            send_alert("llm_failed", "筛选LLM不可用，本轮已降级（未经打分保留前10条）", str(e))
+        except Exception:
+            pass
+        filtered_news = []
+        for item in deduped_news[:10]:
+            item = dict(item)
+            item["relevance_score"] = 0.5
+            item["filter_degraded"] = True
+            item["reason"] = "筛选LLM不可用，降级保留（未经打分）"
+            filtered_news.append(item)
 
     # 保留筛除原因：写入日志 + 落盘（/data/reports/filter_excluded_日期.jsonl）
     if excluded_news:

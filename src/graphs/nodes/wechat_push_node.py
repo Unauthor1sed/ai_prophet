@@ -229,10 +229,14 @@ def wechat_push_node(state: WechatPushInput, config: RunnableConfig, runtime: Ru
             success_count += 1
         else:
             fail_count += 1
-            # 告警：ERROR级日志（运维监控/日志采集可据此触发通知）
             logger.error(
                 f"【告警】企微消息推送失败 ({target})：已重试{max_attempts}次仍失败，"
                 f"最后错误: {last_error}，请检查Webhook配置和网络")
+            try:
+                from utils.alert import send_alert
+                send_alert("push_failed", f"企微推送失败（{target}通道，重试{max_attempts}次）", last_error)
+            except Exception:
+                pass
 
     result_msg: str = f"推送完成：成功{success_count}条，失败{fail_count}条"
     return WechatPushOutput(wechat_push_result=result_msg)

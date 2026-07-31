@@ -61,6 +61,8 @@ JWT_SECRET=改成一段随机字符串        # 建议用 openssl rand -hex 32 �
 
 **方式 A：离线镜像（推荐，交付包中含 `images.tar`）**
 
+`images.tar` 为**双架构镜像包**（linux/amd64 + linux/arm64），x86 服务器与
+Apple Silicon / ARM 服务器均可直接使用，docker 会自动选择本机架构。
 无需联网构建，直接导入镜像后启动：
 ```bash
 docker load -i images.tar

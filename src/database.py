@@ -65,14 +65,29 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def hash_password(password: str) -> str:
-    """密码哈希（SHA256 + 盐值）"""
+def _legacy_hash(password: str) -> str:
+    """旧版哈希（SHA256 + 固定盐），仅用于兼容存量账号"""
     return hashlib.sha256((password + PASSWORD_SALT).encode()).hexdigest()
 
 
+def hash_password(password: str) -> str:
+    """密码哈希：bcrypt（自带随机盐）。安全基线需求1000085"""
+    try:
+        import bcrypt
+        return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    except ImportError:
+        return _legacy_hash(password)
+
+
 def verify_password(password: str, password_hash: str) -> bool:
-    """验证密码"""
-    return hash_password(password) == password_hash
+    """验证密码：bcrypt哈希（$2开头）用bcrypt校验，否则回退旧版SHA256"""
+    if password_hash.startswith("$2"):
+        try:
+            import bcrypt
+            return bcrypt.checkpw(password.encode(), password_hash.encode())
+        except ImportError:
+            return False
+    return _legacy_hash(password) == password_hash
 
 
 def create_session_token() -> str:
@@ -222,7 +237,22 @@ def _init_sqlite():
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """))
-        
+
+        # 全流程执行日志（需求1000089简版）
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS task_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_type TEXT NOT NULL,
+                trigger_source TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'running',
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                items_collected INTEGER DEFAULT 0,
+                items_filtered INTEGER DEFAULT 0,
+                error_msg TEXT DEFAULT ''
+            )
+        """))
+
         # 创建索引
         for idx_sql in [
             "CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status)",
@@ -453,6 +483,13 @@ def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
             return None
         if not verify_password(password, user_dict["password_hash"]):
             return None
+        # 存量SHA256账号登录成功后自动升级为bcrypt哈希
+        if not user_dict["password_hash"].startswith("$2"):
+            try:
+                db.execute(text("UPDATE users SET password_hash = :ph WHERE id = :id"),
+                           {"ph": hash_password(password), "id": user_dict["id"]})
+            except Exception:
+                pass
         # 更新最后登录时间
         db.execute(text("UPDATE users SET last_login = :now WHERE id = :id"), {
             "now": datetime.now(), "id": user_dict["id"]
@@ -566,6 +603,80 @@ def review_action(review_id: int, action: str, comment: str, reviewer_id: int) -
         return True
 
 
+# ========== 执行日志（task_runs） ==========
+
+def create_task_run(task_type: str, trigger_source: str = "") -> int:
+    """创建一条任务执行记录，返回run_id"""
+    with get_db() as db:
+        r = db.execute(text("""
+            INSERT INTO task_runs (task_type, trigger_source, status, started_at)
+            VALUES (:t, :src, 'running', :now) RETURNING id
+        """), {"t": task_type, "src": trigger_source, "now": datetime.now()})
+        return int(r.fetchone()[0])
+
+
+def finish_task_run(run_id: int, status: str, items_collected: int = 0,
+                    items_filtered: int = 0, error_msg: str = "") -> None:
+    """结束一条任务执行记录"""
+    with get_db() as db:
+        db.execute(text("""
+            UPDATE task_runs SET status = :s, finished_at = :now,
+                   items_collected = :c, items_filtered = :f, error_msg = :e
+            WHERE id = :id
+        """), {"s": status, "now": datetime.now(), "c": items_collected,
+               "f": items_filtered, "e": error_msg[:1000], "id": run_id})
+
+
+def get_task_runs(task_type: Optional[str] = None, status: Optional[str] = None,
+                  date_str: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
+    """查询执行记录 + 当日成功率统计"""
+    with get_db() as db:
+        sql = "SELECT * FROM task_runs WHERE 1=1"
+        params: Dict[str, Any] = {"limit": limit}
+        if task_type:
+            sql += " AND task_type = :t"
+            params["t"] = task_type
+        if status:
+            sql += " AND status = :s"
+            params["s"] = status
+        if date_str:
+            sql += " AND date(started_at) = :d"
+            params["d"] = date_str
+        sql += " ORDER BY id DESC LIMIT :limit"
+        rows = [dict(r._mapping) for r in db.execute(text(sql), params).fetchall()]
+        stat = db.execute(text("""
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success
+            FROM task_runs WHERE date(started_at) = date('now', 'localtime')
+        """)).fetchone()
+        total, success = int(stat[0] or 0), int(stat[1] or 0)
+        return {"items": rows, "today_total": total, "today_success": success,
+                "today_success_rate": round(success / total, 3) if total else None}
+
+
+def get_review_history(status: Optional[str] = None, date_str: Optional[str] = None,
+                       keyword: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    """审核历史查询：已处理（approved/rejected）的审核记录，支持状态/日期/关键词过滤"""
+    with get_db() as db:
+        sql = """SELECT rq.id, rq.title, rq.url, rq.source, rq.summary, rq.status,
+                        rq.review_comment, rq.reviewed_at, rq.created_at, u.username AS reviewer
+                 FROM review_queue rq LEFT JOIN users u ON u.id = rq.reviewer_id
+                 WHERE rq.status != 'pending'"""
+        params: Dict[str, Any] = {"limit": limit}
+        if status in ("approved", "rejected"):
+            sql += " AND rq.status = :status"
+            params["status"] = status
+        if date_str:
+            sql += " AND (date(rq.reviewed_at) = :d OR date(rq.created_at) = :d)"
+            params["d"] = date_str
+        if keyword:
+            sql += " AND (rq.title LIKE :kw OR rq.summary LIKE :kw)"
+            params["kw"] = f"%{keyword}%"
+        sql += " ORDER BY rq.reviewed_at DESC LIMIT :limit"
+        rows = db.execute(text(sql), params).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+
 # ========== 敏感词操作 ==========
 
 def get_sensitive_words() -> List[Dict[str, Any]]:
@@ -583,6 +694,42 @@ def add_sensitive_word(word: str, category: str = "general") -> bool:
         return True
     except Exception:
         return False
+
+
+def update_sensitive_word(word_id: int, word: str, category: str) -> bool:
+    """编辑敏感词"""
+    with get_db() as db:
+        r = db.execute(text(
+            "UPDATE sensitive_words SET word = :w, category = :c WHERE id = :id"
+        ), {"w": word, "c": category, "id": word_id})
+        return r.rowcount > 0
+
+
+def import_sensitive_words(lines: List[str]) -> Dict[str, Any]:
+    """批量导入敏感词（TXT每行一个 / CSV: 词,分类）。返回新增/跳过/错误统计"""
+    added, skipped, errors = 0, 0, []
+    with get_db() as db:
+        existing = {r[0] for r in db.execute(text("SELECT word FROM sensitive_words")).fetchall()}
+        for i, raw in enumerate(lines, 1):
+            line = raw.strip().lstrip("﻿")
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            word = parts[0]
+            category = parts[1] if len(parts) > 1 and parts[1] else "general"
+            if not word:
+                continue
+            if len(word) > 50:
+                errors.append(f"第{i}行: 词条过长（>50字符）")
+                continue
+            if word in existing:
+                skipped += 1
+                continue
+            db.execute(text("INSERT INTO sensitive_words (word, category) VALUES (:w, :c)"),
+                       {"w": word, "c": category})
+            existing.add(word)
+            added += 1
+    return {"added": added, "skipped_duplicates": skipped, "errors": errors}
 
 
 def delete_sensitive_word(word_id: int) -> bool:
@@ -614,6 +761,17 @@ def add_news_source(name: str, url: str, source_type: str = "rss", category: str
         return True
     except Exception:
         return False
+
+
+def update_news_source(source_id: int, name: str, url: str, source_type: str, category: str) -> bool:
+    """编辑资讯源"""
+    with get_db() as db:
+        r = db.execute(text("""
+            UPDATE news_sources SET name = :n, url = :u, source_type = :t, category = :c,
+                   updated_at = :now WHERE id = :id
+        """), {"n": name, "u": url, "t": source_type, "c": category,
+               "now": datetime.now(), "id": source_id})
+        return r.rowcount > 0
 
 
 def toggle_news_source(source_id: int) -> bool:

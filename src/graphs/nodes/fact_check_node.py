@@ -101,7 +101,7 @@ def fact_check_node(state: FactCheckInput, config: RunnableConfig, runtime: Runt
         elif isinstance(result, dict) and "items" in result:
             fact_results = result["items"]
     except Exception as e:
-        logger.warning(f"事实校验LLM调用失败，默认通过: {e}")
+        logger.error(f"事实校验LLM调用失败: {e}")
 
     if fact_results:
         for i, item in enumerate(audit_results):
@@ -110,7 +110,17 @@ def fact_check_node(state: FactCheckInput, config: RunnableConfig, runtime: Runt
                 item["fact_check"] = fc.get("fact_check", "通过")
                 item["fact_reason"] = fc.get("reason", "")
     else:
-        logger.warning("事实校验LLM返回为空，已按默认'通过'处理")
+        # 校验失败不放行：全部转"待核实"（存疑）进人工审核，禁止直接推送
+        logger.error("事实校验不可用（LLM失败或返回为空），本批全部转待核实，不直接推送")
+        try:
+            from utils.alert import send_alert
+            send_alert("llm_failed", "事实校验LLM不可用，本批内容已全部转人工待核实")
+        except Exception:
+            pass
+        for item in audit_results:
+            if item.get("audit_level") != "有害":
+                item["fact_check"] = "存疑"
+                item["fact_reason"] = "事实校验暂不可用，转人工待核实"
 
     # 构建 news 索引
     news_index: Dict[str, Dict[str, Any]] = {}
@@ -144,10 +154,13 @@ def fact_check_node(state: FactCheckInput, config: RunnableConfig, runtime: Runt
                 rel_score = float(news.get("relevance_score", 0.5) or 0.5)
             except (ValueError, TypeError):
                 rel_score = 0.5
+            # 字段映射：优先中文翻译（title_cn/snippet_cn），关键词并入摘要（需求1000082/1000096）
+            keywords = news.get("keywords") or []
+            kw_str = " | 关键词: " + "、".join(keywords[:5]) if keywords else ""
             pool_data: Dict[str, Any] = {
                 "url": url,
-                "title": str(news.get("title", item.get("title", ""))),
-                "summary": str(news.get("snippet", "")),
+                "title": str(news.get("title_cn") or news.get("title") or item.get("title", "")),
+                "summary": str(news.get("snippet_cn") or news.get("snippet", "")) + kw_str,
                 "source": str(news.get("site_name", "")),
                 "relevance_score": rel_score,
                 "news_date": datetime.date.today().isoformat(),

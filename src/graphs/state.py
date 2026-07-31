@@ -84,6 +84,9 @@ class GraphOutput(BaseModel):
     review_completed: bool = Field(default=False, description="人工复核是否完成")
     monitor_report: str = Field(default="", description="运维监控报告")
     wechat_push_result: str = Field(default="", description="企微推送结果")
+    # 供执行日志（task_runs）统计采集/入选条数
+    raw_news: List[dict] = Field(default=[], description="原始采集资讯列表")
+    filtered_news: List[dict] = Field(default=[], description="筛选后资讯列表")
 
 
 # ============================================================

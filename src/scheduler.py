@@ -24,44 +24,95 @@ DATA_DIR = os.getenv("DATA_DIR", "/data")
 WECHAT_WEBHOOK_URL = os.getenv("WECHAT_WEBHOOK_URL", "")
 REVIEW_WEBHOOK_URL = os.getenv("REVIEW_WEBHOOK_URL", "")
 
+# 调度时间可配置（需求1000091）：
+# DAILY_REPORT_TIME=HH:MM 每日早报时间（默认09:00）
+# DAILY_REPORT_DAYS=cron星期表达式（默认mon-fri工作日；每天用 mon-sun 或 *）
+# COLLECT_INTERVAL_MINUTES=增量采集间隔分钟（默认60，最小5）
+def _parse_report_time() -> tuple:
+    raw = os.getenv("DAILY_REPORT_TIME", "09:00").strip()
+    try:
+        h, m = raw.split(":")
+        h, m = int(h), int(m)
+        assert 0 <= h <= 23 and 0 <= m <= 59
+        return h, m
+    except Exception:
+        logger.warning(f"DAILY_REPORT_TIME 配置无效（{raw}），使用默认 09:00")
+        return 9, 0
+
+DAILY_REPORT_HOUR, DAILY_REPORT_MINUTE = _parse_report_time()
+DAILY_REPORT_DAYS = os.getenv("DAILY_REPORT_DAYS", "mon-fri").strip() or "mon-fri"
+try:
+    COLLECT_INTERVAL_MINUTES = max(5, int(os.getenv("COLLECT_INTERVAL_MINUTES", "60")))
+except ValueError:
+    COLLECT_INTERVAL_MINUTES = 60
+
 _scheduler = None
 _running = False
+
+
+def _run_news_task(task_type: str, invoke_args: dict):
+    """统一任务执行器：执行记录（task_runs）+ 采集全失败/任务异常统一告警"""
+    from utils.alert import send_alert
+    run_id = 0
+    try:
+        run_id = database.create_task_run(task_type, invoke_args.get("trigger_source", ""))
+    except Exception as e:
+        logger.warning(f"创建执行记录失败: {e}")
+    try:
+        from graphs.graph import main_graph
+        result = main_graph.invoke(invoke_args)
+        collected = len(result.get("raw_news") or [])
+        filtered = len(result.get("filtered_news") or [])
+        if collected == 0:
+            # 采集全失败：告警 + 记为failed
+            send_alert("collect_failed", f"{task_type}: 所有资讯源采集失败（0条）",
+                       "请检查网络与资讯源配置")
+            if run_id:
+                database.finish_task_run(run_id, "failed", 0, 0, "采集0条")
+        else:
+            status = "success" if filtered > 0 else "partial"
+            if run_id:
+                database.finish_task_run(run_id, status, collected, filtered)
+        return result
+    except Exception as e:
+        logger.error(f"{task_type}任务失败: {e}", exc_info=True)
+        send_alert("task_failed", f"{task_type} 任务执行异常", str(e))
+        if run_id:
+            try:
+                database.finish_task_run(run_id, "failed", 0, 0, str(e))
+            except Exception:
+                pass
+        return None
 
 
 def _do_daily_news():
     """执行每日早报任务"""
     logger.info("开始执行每日早报任务")
-    try:
-        from graphs.graph import main_graph
-        result = main_graph.invoke({
-            "workflow_mode": "daily_news",
-            "wechat_webhook_url": WECHAT_WEBHOOK_URL,
-            "review_webhook_url": REVIEW_WEBHOOK_URL,
-            "trigger_source": "schedule",
-            "skip_wechat_push": not bool(WECHAT_WEBHOOK_URL)
-        })
+    result = _run_news_task("daily_news", {
+        "workflow_mode": "daily_news",
+        "wechat_webhook_url": WECHAT_WEBHOOK_URL,
+        "review_webhook_url": REVIEW_WEBHOOK_URL,
+        "trigger_source": "schedule",
+        "skip_wechat_push": not bool(WECHAT_WEBHOOK_URL)
+    })
+    if result:
         logger.info(f"每日早报任务完成: {result.get('daily_report_url', 'N/A')}")
-    except Exception as e:
-        logger.error(f"每日早报任务失败: {e}", exc_info=True)
 
 
 def _do_incremental_collect():
     """增量采集资讯"""
     logger.info("开始增量采集资讯")
-    try:
-        from graphs.graph import main_graph
-        result = main_graph.invoke({
-            "workflow_mode": "daily_news",
-            # 增量采集：不推早报摘要（wechat_push_node 按 trigger_source 判断），
-            # 仅将存疑内容推送到审核群
-            "wechat_webhook_url": "",
-            "review_webhook_url": REVIEW_WEBHOOK_URL,
-            "trigger_source": "incremental",
-            "skip_wechat_push": not bool(REVIEW_WEBHOOK_URL)
-        })
+    result = _run_news_task("incremental_collect", {
+        "workflow_mode": "daily_news",
+        # 增量采集：不推早报摘要（wechat_push_node 按 trigger_source 判断），
+        # 仅将存疑内容推送到审核群
+        "wechat_webhook_url": "",
+        "review_webhook_url": REVIEW_WEBHOOK_URL,
+        "trigger_source": "incremental",
+        "skip_wechat_push": not bool(REVIEW_WEBHOOK_URL)
+    })
+    if result:
         logger.info("增量采集完成")
-    except Exception as e:
-        logger.error(f"增量采集失败: {e}", exc_info=True)
 
 
 def _process_paper_task(task: dict):
@@ -154,21 +205,31 @@ def start_scheduler():
         logger.warning("调度器已在运行")
         return
     
+    # 启动时清理上次进程中断遗留的 running 记录
+    try:
+        from sqlalchemy import text as _text
+        with database.get_db() as _db:
+            _db.execute(_text(
+                "UPDATE task_runs SET status='failed', error_msg='进程重启中断' WHERE status='running'"))
+    except Exception as e:
+        logger.warning(f"清理遗留执行记录失败: {e}")
+
     try:
         _scheduler = BackgroundScheduler()
         
-        # 每日9:00早报
+        # 每日早报（时间/星期可配置）
         _scheduler.add_job(
             _do_daily_news,
-            CronTrigger(hour=9, minute=0),
+            CronTrigger(hour=DAILY_REPORT_HOUR, minute=DAILY_REPORT_MINUTE,
+                        day_of_week=DAILY_REPORT_DAYS),
             id='daily_news',
             replace_existing=True
         )
-        
-        # 每60分钟增量采集
+
+        # 增量采集（间隔可配置）
         _scheduler.add_job(
             _do_incremental_collect,
-            IntervalTrigger(minutes=60),
+            IntervalTrigger(minutes=COLLECT_INTERVAL_MINUTES),
             id='incremental_collect',
             replace_existing=True
         )
@@ -183,7 +244,9 @@ def start_scheduler():
         
         _scheduler.start()
         _running = True
-        logger.info("调度器启动：每日9:00早报，每60分钟增量采集，论文任务每15秒轮询")
+        logger.info(
+            f"调度器启动：早报 {DAILY_REPORT_DAYS} {DAILY_REPORT_HOUR:02d}:{DAILY_REPORT_MINUTE:02d}，"
+            f"每{COLLECT_INTERVAL_MINUTES}分钟增量采集，论文任务每15秒轮询")
     except Exception as e:
         logger.error(f"调度器启动失败: {e}", exc_info=True)
 

@@ -86,9 +86,11 @@ def news_translate_node(state: NewsTranslateInput, config: RunnableConfig, runti
             trans_snippet: str = t_item.get("snippet", "")
             orig_snippet: str = item.get("snippet", "")
             enriched_item["snippet_cn"] = trans_snippet if trans_snippet else orig_snippet
+            enriched_item["keywords"] = t_item.get("keywords") or []
         else:
             enriched_item["title_cn"] = item.get("title", "")
             enriched_item["snippet_cn"] = item.get("snippet", "")
+            enriched_item["keywords"] = []
         enriched_news.append(enriched_item)
 
     logger.info(f"翻译完成，共 {len(translated_news)} 条资讯")

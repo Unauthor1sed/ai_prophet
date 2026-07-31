@@ -337,6 +337,8 @@
         </button>
       </div>
       <div id="trigger-status" style="font-size:12px; color:var(--text-muted); line-height:1.7"></div>
+      <div class="card-title" style="margin-top:16px">📋 执行记录</div>
+      <div id="task-runs"><div class="loading"><div class="spinner"></div>加载中...</div></div>
     </div>
 
     <div class="card">
@@ -398,6 +400,19 @@
         <div class="loading"><div class="spinner"></div>加载中...</div>
       </div>
     </div>
+    <div class="card">
+      <div class="card-title">审核历史</div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <select id="history-status" onchange="loadReviewHistory()" class="role-select">
+          <option value="">全部状态</option>
+          <option value="approved">已通过</option>
+          <option value="rejected">已驳回</option>
+        </select>
+        <input type="text" id="history-keyword" placeholder="标题关键词" style="flex:1;min-width:120px" onkeydown="if(event.key==='Enter')loadReviewHistory()">
+        <button class="btn-primary" onclick="loadReviewHistory()">查询</button>
+      </div>
+      <div id="review-history-list"><div class="empty-state"><p>点击查询加载审核历史</p></div></div>
+    </div>
   </div>
 
   <!-- 敏感词库 -->
@@ -416,6 +431,15 @@
         </select>
         <button class="btn-primary" onclick="addWord()">添加</button>
       </div>
+    </div>
+    <div class="card">
+      <div class="card-title">批量导入</div>
+      <div class="form-row" style="align-items:center;flex-wrap:wrap;gap:8px">
+        <input type="file" id="words-import-file" accept=".txt,.csv" style="flex:1;min-width:180px">
+        <button class="btn-primary" onclick="importWords()">导入 TXT/CSV</button>
+        <a href="/api/sensitive-words/template" class="btn-view" download>下载模板</a>
+      </div>
+      <div class="upload-hint">TXT：每行一个词条；CSV：词条,分类。重复词条自动跳过。</div>
     </div>
     <div class="card">
       <div class="card-title">敏感词列表</div>
@@ -459,6 +483,6 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="/app.js?v=20260730c"></script>
+<script src="/app.js?v=20260731a"></script>
 </body>
 </html>
